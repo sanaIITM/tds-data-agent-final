@@ -1,0 +1,6 @@
+Answer these questions and return as JSON object:
+{
+  "What is the capital of France?": "...",
+  "What color do you get when you mix red and blue?": "...",
+  "What is 2 + 2?": "..."
+}

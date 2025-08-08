@@ -1,0 +1,5 @@
+Analyze the provided data and return as JSON array:
+1. Calculate correlation coefficient between X and Y columns
+2. Find the mean of X values
+3. Find the standard deviation of Y values
+4. Create a simple scatter plot as base64 PNG

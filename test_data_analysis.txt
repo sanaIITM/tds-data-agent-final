@@ -1,0 +1,10 @@
+Analyze the provided CSV data file containing sample sales data.
+
+Answer the following questions and respond with a JSON object containing the answer.
+
+{
+  "What is the total sales amount?": "...",
+  "Which product has the highest sales?": "...",
+  "What's the average sales per month?": "...",
+  "Create a bar chart showing sales by product. Encode as a base64 data URI under 100,000 characters": "data:image/png;base64,..."
+}

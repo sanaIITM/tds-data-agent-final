@@ -1,0 +1,5 @@
+Calculate the following and return as a JSON array:
+1. Sum of numbers: 15, 25, 30, 10
+2. Average of the same numbers
+3. Maximum value
+4. Minimum value

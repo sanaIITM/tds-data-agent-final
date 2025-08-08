@@ -1,0 +1,8 @@
+Analyze the provided data and answer the following questions:
+
+1. What is the sum of all numbers in the dataset?
+2. What is the average value?
+3. Which number appears most frequently?
+4. Create a histogram of the data distribution. Return as a base-64 encoded data URI under 100,000 bytes.
+
+Respond with a JSON array containing these answers.

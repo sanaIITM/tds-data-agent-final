@@ -1,0 +1,9 @@
+Additional Information File:
+
+This file contains supplementary information for the analysis:
+- Data collection period: January 2024 to March 2024
+- Source: Internal company database
+- Quality checks: All records validated
+- Missing values: Handled using mean imputation
+
+Please consider this context when performing the analysis.
