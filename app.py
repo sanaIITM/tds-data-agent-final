@@ -1,5 +1,5 @@
 #app.py
-#generalize llm for unseen questions
+#key value pair edit 
 import os
 import json
 import tempfile
@@ -353,7 +353,13 @@ Questions:
                 first_df = list(dataframes.values())[0]
                 print(f"Default analysis on dataframe with columns: {list(first_df.columns)}")
                 plot_b64 = self.create_visualization(first_df)
-                return [1, "Analysis", 0.5, plot_b64]
+                
+                # Generate meaningful description based on actual data
+                description = f"Data visualization of {first_df.shape[0]} records with {first_df.shape[1]} columns"
+                if len(first_df.columns) >= 2:
+                    description += f" ({', '.join(first_df.columns[:3])}{'...' if len(first_df.columns) > 3 else ''})"
+                
+                return [1, description, 0.5, plot_b64]
             
             print("No dataframes available")
             return [1, "No Data", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
