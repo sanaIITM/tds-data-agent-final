@@ -112,3 +112,6 @@ curl -X POST "http://localhost:8000/api/" \
 ## License
 
 MIT License - see LICENSE file for details
+
+
+## Author : Sana Bint Salim
