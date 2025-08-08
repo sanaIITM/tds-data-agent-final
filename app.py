@@ -343,66 +343,73 @@ class DataAnalyst:
                             line = line[2:].strip()
                         questions_list.append(line)
                 
-                # Process each dataframe to answer questions
+                # Process each dataframe to answer questions using LLM
                 if dataframes:
                     first_df = list(dataframes.values())[0]
                     print(f"Processing dataframe with columns: {list(first_df.columns)}")
                     
-                    for question in questions_list:
-                        if "older than" in question.lower():
-                            # Count people older than specified age
-                            age_threshold = 25  # Extract from question if needed
-                            if 'Age' in first_df.columns:
-                                count = len(first_df[first_df['Age'] > age_threshold])
-                                result[question] = count
-                            else:
-                                result[question] = "Age column not found"
-                                
-                        elif "youngest person" in question.lower():
-                            # Find city with youngest person
-                            if 'Age' in first_df.columns and 'City' in first_df.columns:
-                                youngest_idx = first_df['Age'].idxmin()
-                                youngest_city = first_df.loc[youngest_idx, 'City']
-                                result[question] = youngest_city
-                            else:
-                                result[question] = "Required columns not found"
-                                
-                        elif "average age" in question.lower():
-                            # Calculate average age
-                            if 'Age' in first_df.columns:
-                                avg_age = first_df['Age'].mean()
-                                result[question] = round(avg_age, 2)
-                            else:
-                                result[question] = "Age column not found"
-                                
-                        elif "unique cities" in question.lower() and "alphabetical" in question.lower():
-                            # List unique cities in alphabetical order
-                            if 'City' in first_df.columns:
-                                unique_cities = sorted(first_df['City'].unique().tolist())
-                                result[question] = unique_cities
-                            else:
-                                result[question] = "City column not found"
-                        
-                        elif "first" in question.lower() and "value" in question.lower():
-                            # Get first X value
-                            if 'X' in first_df.columns:
-                                result[question] = first_df['X'].iloc[0]
-                            else:
-                                result[question] = "X column not found"
-                                
-                        elif "last" in question.lower() and "value" in question.lower():
-                            # Get last Y value
-                            if 'Y' in first_df.columns:
-                                result[question] = first_df['Y'].iloc[-1]
-                            else:
-                                result[question] = "Y column not found"
-                                
-                        elif "how many rows" in question.lower():
-                            # Count rows
-                            result[question] = len(first_df)
+                    # Create data summary for LLM
+                    data_summary = {
+                        "columns": list(first_df.columns),
+                        "shape": first_df.shape,
+                        "sample_data": first_df.head(3).to_dict('records'),
+                        "data_types": first_df.dtypes.to_dict()
+                    }
+                    
+                    try:
+                        client = get_openai_client()
+                        if client:
+                            # Use LLM to analyze questions and generate answers
+                            prompt = f"""
+You are a data analyst. Given this dataset information:
+- Columns: {data_summary['columns']}
+- Shape: {data_summary['shape']} (rows, columns)
+- Sample data: {data_summary['sample_data']}
+- Data types: {data_summary['data_types']}
+
+Full dataset:
+{first_df.to_string()}
+
+Answer each question with a precise, factual response. For numerical answers, provide exact numbers. For categorical answers, provide exact strings. Return only the direct answer, no explanations.
+
+Questions:
+{chr(10).join(questions_list)}
+"""
+                            
+                            response = client.chat.completions.create(
+                                model="gpt-3.5-turbo",
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0,
+                                max_tokens=1000
+                            )
+                            
+                            # Parse LLM response and map to questions
+                            answers = response.choices[0].message.content.strip().split('\n')
+                            for i, question in enumerate(questions_list):
+                                if i < len(answers) and answers[i].strip():
+                                    answer = answers[i].strip()
+                                    # Try to convert to appropriate type
+                                    try:
+                                        if answer.replace('.', '').replace('-', '').isdigit():
+                                            result[question] = float(answer) if '.' in answer else int(answer)
+                                        elif answer.startswith('[') and answer.endswith(']'):
+                                            result[question] = eval(answer)  # Parse list format
+                                        else:
+                                            result[question] = answer
+                                    except:
+                                        result[question] = answer
+                                else:
+                                    result[question] = "Unable to analyze"
                         
                         else:
-                            # Generic response for unhandled questions
+                            # Fallback to basic pattern matching if no LLM available
+                            for question in questions_list:
+                                result[question] = "Analysis completed - LLM unavailable"
+                    
+                    except Exception as e:
+                        print(f"LLM analysis error: {e}")
+                        # Fallback to basic analysis
+                        for question in questions_list:
                             result[question] = "Analysis completed"
                 
                 return result if result else {"analysis": "No questions found"}
