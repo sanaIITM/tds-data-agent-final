@@ -1,0 +1,14 @@
+[build]
+  # This is a Python FastAPI application, not a static site
+  # Netlify is not the ideal platform for this type of application
+  # This file is created for compatibility but Render is recommended
+  
+  command = "echo 'This is a Python FastAPI application. Please deploy to Render instead.'"
+  publish = "."
+
+[build.environment]
+  PYTHON_VERSION = "3.10"
+
+# Note: This application requires a Python runtime environment
+# and is better suited for deployment on Render, Railway, or Heroku
+# rather than Netlify which is primarily for static sites.

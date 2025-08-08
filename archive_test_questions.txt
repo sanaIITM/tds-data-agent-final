@@ -1,0 +1,1 @@
+Analyze the provided dataset and create a visualization showing data trends. Focus on any Titanic-related analysis if the data contains movie rankings. Return appropriate JSON format based on the analysis type.

@@ -1,0 +1,3 @@
+Which high court disposed the most cases from 2019 - 2022?
+What's the regression slope for case disposal trends?
+Plot the year-wise case disposal data for all high courts.
