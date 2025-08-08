@@ -21,7 +21,7 @@ from sklearn.linear_model import LinearRegression
 import requests
 from bs4 import BeautifulSoup
 import duckdb
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 from fastapi.responses import JSONResponse
 import aiofiles
 from PIL import Image
@@ -376,12 +376,16 @@ class DataAnalyst:
             return [1, "Error", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
 
 @app.post("/api/")
-async def analyze_data_endpoint(files: List[UploadFile] = File(...)):
+async def analyze_data_endpoint(request: Request):
     """Main API endpoint for data analysis"""
-    print(f"API endpoint called with {len(files)} files")
+    print("API endpoint called")
     analyst = DataAnalyst()
     
     try:
+        # Parse multipart form data
+        form = await request.form()
+        print(f"Received form fields: {list(form.keys())}")
+        
         # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
             print(f"Created temp directory: {temp_dir}")
@@ -391,31 +395,48 @@ async def analyze_data_endpoint(files: List[UploadFile] = File(...)):
             questions_content = ""
             local_files = []
             
-            for file in files:
-                print(f"Processing file: {file.filename}")
-                file_path = os.path.join(temp_dir, file.filename)
+            # Process questions.txt (required)
+            if "questions.txt" not in form:
+                print("ERROR: questions.txt is required")
+                raise HTTPException(status_code=400, detail="questions.txt is required")
+            
+            questions_file = form["questions.txt"]
+            if hasattr(questions_file, 'read'):
+                # It's an UploadFile
+                questions_content = (await questions_file.read()).decode('utf-8')
+                print(f"Found questions.txt with content: {questions_content[:100]}...")
+            else:
+                # It's a string
+                questions_content = str(questions_file)
+                print(f"Found questions.txt as string: {questions_content[:100]}...")
+            
+            # Process all other files (optional)
+            for field_name, file_data in form.items():
+                if field_name == "questions.txt":
+                    continue  # Already processed
                 
-                async with aiofiles.open(file_path, 'wb') as f:
-                    content = await file.read()
-                    await f.write(content)
-                
-                # Handle questions.txt (or any file containing "questions")
-                if "questions" in file.filename.lower() and file.filename.endswith('.txt'):
-                    questions_content = content.decode('utf-8')
-                    print(f"Found questions file with content: {questions_content[:100]}...")
-                elif file.filename.endswith(('.zip', '.tar.gz', '.tgz')):
-                    # Handle archives
-                    print(f"Extracting archive: {file.filename}")
-                    extracted = await analyst.extract_archive(file_path, temp_dir)
-                    local_files.extend(extracted)
-                else:
-                    # Handle other data files
-                    print(f"Adding data file: {file.filename}")
-                    local_files.append(file_path)
+                if hasattr(file_data, 'read'):
+                    # It's an UploadFile
+                    print(f"Processing file: {field_name} -> {file_data.filename}")
+                    file_path = os.path.join(temp_dir, file_data.filename or field_name)
+                    
+                    async with aiofiles.open(file_path, 'wb') as f:
+                        content = await file_data.read()
+                        await f.write(content)
+                    
+                    if file_data.filename and file_data.filename.endswith(('.zip', '.tar.gz', '.tgz')):
+                        # Handle archives
+                        print(f"Extracting archive: {file_data.filename}")
+                        extracted = await analyst.extract_archive(file_path, temp_dir)
+                        local_files.extend(extracted)
+                    else:
+                        # Handle other data files
+                        print(f"Adding data file: {file_path}")
+                        local_files.append(file_path)
             
             if not questions_content:
-                print("ERROR: No questions.txt found")
-                raise HTTPException(status_code=400, detail="questions.txt is required")
+                print("ERROR: questions.txt content is empty")
+                raise HTTPException(status_code=400, detail="questions.txt content is required")
             
             print(f"Questions content: {questions_content}")
             print(f"Local files: {local_files}")
