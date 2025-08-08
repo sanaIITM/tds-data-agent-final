@@ -1,0 +1,7 @@
+Analyze the data and respond with a JSON object:
+{
+  "total_records": "number of rows",
+  "average_value": "mean of all numeric values", 
+  "data_summary": "brief text description",
+  "visualization": "base64 encoded histogram"
+}

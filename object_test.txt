@@ -1,0 +1,8 @@
+Please analyze the data and provide answers in JSON object format:
+
+{
+  "total_records": "How many data points are there?",
+  "max_value": "What is the maximum Y value?",
+  "min_value": "What is the minimum Y value?",
+  "average": "What is the average of all Y values?"
+}

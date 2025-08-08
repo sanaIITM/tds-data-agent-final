@@ -1,0 +1,8 @@
+Analyze the provided CSV data and answer these questions. Return as JSON object:
+
+{
+  "total_rows": "number of data rows",
+  "sum_of_values": "sum of all numeric values",
+  "average_value": "mean of numeric values",
+  "max_value": "maximum value found"
+}

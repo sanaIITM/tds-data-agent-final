@@ -1,0 +1,5 @@
+Answer these simple questions about the data:
+
+What is the first X value?
+What is the last Y value?
+How many rows are there?
