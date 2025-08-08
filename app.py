@@ -354,12 +354,31 @@ Questions:
                 print(f"Default analysis on dataframe with columns: {list(first_df.columns)}")
                 plot_b64 = self.create_visualization(first_df)
                 
-                # Generate meaningful description based on actual data
-                description = f"Data visualization of {first_df.shape[0]} records with {first_df.shape[1]} columns"
-                if len(first_df.columns) >= 2:
-                    description += f" ({', '.join(first_df.columns[:3])}{'...' if len(first_df.columns) > 3 else ''})"
+                # Generate dynamic array values based on actual data analysis
+                # First value: count of records or relevant metric
+                first_value = first_df.shape[0]
                 
-                return [1, description, 0.5, plot_b64]
+                # Second value: most common categorical value or relevant insight
+                second_value = "Analysis"
+                for col in first_df.columns:
+                    if first_df[col].dtype == 'object':  # categorical column
+                        most_common = first_df[col].mode()
+                        if len(most_common) > 0:
+                            second_value = str(most_common.iloc[0]).lower()
+                            break
+                
+                # Third value: calculated metric (average, ratio, etc.)
+                third_value = 0.5
+                numeric_cols = first_df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    # Use average of first numeric column, normalized to 0-1 range
+                    avg_val = first_df[numeric_cols[0]].mean()
+                    max_val = first_df[numeric_cols[0]].max()
+                    min_val = first_df[numeric_cols[0]].min()
+                    if max_val > min_val:
+                        third_value = round((avg_val - min_val) / (max_val - min_val), 3)
+                
+                return [first_value, second_value, third_value, plot_b64]
             
             print("No dataframes available")
             return [1, "No Data", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
