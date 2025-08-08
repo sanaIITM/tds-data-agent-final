@@ -1,0 +1,1 @@
+Analyze the provided dataset and create visualizations showing the relationship between age and city distribution. Calculate statistical measures and return insights about the demographic patterns.

@@ -1,0 +1,10 @@
+Analyze the employee dataset and return results as a JSON object where each key is the question and the value is the answer:
+
+1. What is the average salary across all employees?
+2. Which department has the highest average salary?
+3. How many employees are in each department?
+4. What is the correlation between age and salary?
+5. Which city has the most employees?
+6. What percentage of employees have more than 5 years experience?
+7. Who is the youngest employee in the Engineering department?
+8. What is the salary range (max - min) in the company?

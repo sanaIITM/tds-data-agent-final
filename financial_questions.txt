@@ -1,0 +1,8 @@
+Analyze the financial data and return results as a JSON object where each key is the question and the value is the answer:
+
+1. Which company has the highest revenue?
+2. What is the average profit across all companies?
+3. Which industry is most represented in the dataset?
+4. What is the profit margin for TechCorp?
+5. How many total employees across all companies?
+6. Which company has the best revenue per employee ratio?

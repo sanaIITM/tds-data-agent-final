@@ -1,0 +1,8 @@
+Analyze the provided dataset and return results as a JSON object where each key is the question and the value is the answer:
+
+1. What is the total number of records in the dataset?
+2. What are the column names in the dataset?
+3. What is the data type of each column?
+4. What is the first value in the first column?
+5. What is the last value in the last column?
+6. How many unique values are in the first column?
