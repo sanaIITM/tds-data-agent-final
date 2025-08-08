@@ -1,5 +1,5 @@
 #app.py
-#key value pair edit 
+#generalize llm for unseen questions
 import os
 import json
 import tempfile
@@ -33,7 +33,7 @@ from openai import OpenAI
 # OPENAI_BASE_URL should be set as environment variable
 
 app = FastAPI(title="TDS Data Analyst Agent", version="1.0.0")
-
+                                
 # Initialize OpenAI client (will be initialized when needed to avoid startup errors)
 client = None
 
@@ -248,86 +248,15 @@ class DataAnalyst:
             return f"data:image/png;base64,{img_base64}"
     
     async def analyze_data(self, dataframes: Dict[str, pd.DataFrame], questions_content: str) -> Union[List, Dict]:
-        """Perform data analysis based on questions"""
+        """Perform data analysis based on questions - fully generalized for any dataset"""
         print(f"Starting analysis with {len(dataframes)} dataframes")
         print(f"Questions content: {questions_content[:100]}...")
         
         try:
-            # Check if this is a Titanic-related analysis
-            if "titanic" in questions_content.lower():
-                print("Detected Titanic analysis")
-                
-                # Check if we have data with Rank and Peak columns
-                for df_name, df in dataframes.items():
-                    print(f"Processing dataframe {df_name} with columns: {list(df.columns)}")
-                    
-                    if 'Rank' in df.columns and 'Peak' in df.columns:
-                        print("Found Rank and Peak columns, creating visualization")
-                        
-                        # Create scatter plot with regression line
-                        plt.figure(figsize=(10, 6))
-                        plt.scatter(df['Rank'], df['Peak'], alpha=0.7, s=50)
-                        
-                        # Add regression line
-                        reg = LinearRegression()
-                        reg.fit(df['Rank'].values.reshape(-1, 1), df['Peak'].values)
-                        x_range = np.linspace(df['Rank'].min(), df['Rank'].max(), 100)
-                        y_pred = reg.predict(x_range.reshape(-1, 1))
-                        plt.plot(x_range, y_pred, linestyle=":", color="red", linewidth=2)
-                        
-                        plt.xlabel("Rank")
-                        plt.ylabel("Peak")
-                        plt.title("Rank vs Peak Analysis")
-                        
-                        # Save plot
-                        buffer = io.BytesIO()
-                        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-                        buffer.seek(0)
-                        
-                        # Check size and compress if needed
-                        if buffer.getbuffer().nbytes > 100000:
-                            img = Image.open(buffer)
-                            buffer = io.BytesIO()
-                            img.save(buffer, format='PNG', optimize=True, quality=85)
-                            buffer.seek(0)
-                        
-                        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                        plt.close()
-                        
-                        return [1, "Titanic", 0.485782, f"data:image/png;base64,{img_base64}"]
-                
-                # Fallback for Titanic case - create synthetic data
-                print("Creating fallback Titanic visualization")
-                plt.figure(figsize=(8, 6))
-                
-                # Use deterministic data (no random)
-                rank_data = np.arange(1, 21)
-                peak_data = 95 - rank_data * 1.2  # Simple linear relationship
-                
-                plt.scatter(rank_data, peak_data, alpha=0.7, s=50)
-                
-                # Add regression line
-                reg = LinearRegression()
-                reg.fit(rank_data.reshape(-1, 1), peak_data)
-                y_pred = reg.predict(rank_data.reshape(-1, 1))
-                plt.plot(rank_data, y_pred, linestyle=":", color="red", linewidth=2)
-                
-                plt.xlabel("Rank")
-                plt.ylabel("Peak")
-                plt.title("Rank vs Peak Analysis")
-                
-                buffer = io.BytesIO()
-                plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-                buffer.seek(0)
-                img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                plt.close()
-                
-                return [1, "Titanic", 0.485782, f"data:image/png;base64,{img_base64}"]
-            
             # Check for JSON object response request
-            elif ("json object" in questions_content.lower() or 
-                  "key is the question" in questions_content.lower() or
-                  "where each key" in questions_content.lower()):
+            if ("json object" in questions_content.lower() or 
+                "key is the question" in questions_content.lower() or
+                "where each key" in questions_content.lower()):
                 print("Detected JSON object response request")
                 result = {}
                 
@@ -370,10 +299,10 @@ You are a data analyst. Given this dataset information:
 Full dataset:
 {first_df.to_string()}
 
-Answer each question with a precise, factual response. For numerical answers, provide exact numbers. For categorical answers, provide exact strings. Return only the direct answer, no explanations.
+Answer each question with a precise, factual response. Number your answers (1., 2., etc.) and provide only direct answers without explanations.
 
 Questions:
-{chr(10).join(questions_list)}
+{chr(10).join([f"{i+1}. {q}" for i, q in enumerate(questions_list)])}
 """
                             
                             response = client.chat.completions.create(
@@ -388,10 +317,14 @@ Questions:
                             for i, question in enumerate(questions_list):
                                 if i < len(answers) and answers[i].strip():
                                     answer = answers[i].strip()
+                                    # Remove numbering from answer if present
+                                    if answer.startswith(f"{i+1}."):
+                                        answer = answer[len(f"{i+1}."):].strip()
+                                    
                                     # Try to convert to appropriate type
                                     try:
-                                        if answer.replace('.', '').replace('-', '').isdigit():
-                                            result[question] = float(answer) if '.' in answer else int(answer)
+                                        if answer.replace('.', '').replace('-', '').replace(',', '').isdigit():
+                                            result[question] = float(answer.replace(',', '')) if '.' in answer else int(answer.replace(',', ''))
                                         elif answer.startswith('[') and answer.endswith(']'):
                                             result[question] = eval(answer)  # Parse list format
                                         else:
@@ -414,42 +347,8 @@ Questions:
                 
                 return result if result else {"analysis": "No questions found"}
             
-            # Check for High Court analysis (Case B - JSON object)
-            elif "high court" in questions_content.lower():
-                print("Detected High Court analysis")
-                result = {}
-                
-                # Process questions and provide answers
-                questions = questions_content.split('\n')
-                for question in questions:
-                    question = question.strip()
-                    if question and '?' in question:
-                        if "disposed the most cases" in question.lower():
-                            result[question] = "Delhi High Court"
-                        elif "regression slope" in question.lower():
-                            result[question] = "0.234"
-                        elif "plot" in question.lower():
-                            # Create a sample plot
-                            plt.figure(figsize=(10, 6))
-                            years = [2019, 2020, 2021, 2022]
-                            cases = [1200, 1350, 1100, 1400]
-                            plt.bar(years, cases)
-                            plt.xlabel("Year")
-                            plt.ylabel("Cases Disposed")
-                            plt.title("High Court Cases by Year")
-                            
-                            buffer = io.BytesIO()
-                            plt.savefig(buffer, format='webp', dpi=100, bbox_inches='tight')
-                            buffer.seek(0)
-                            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                            plt.close()
-                            
-                            result[question] = f"data:image/webp;base64,{img_base64}"
-                
-                return result if result else {"analysis": "No specific questions found"}
-            
-            # Default analysis for any data
-            print("Performing default analysis")
+            # Default analysis for any data - JSON array format
+            print("Performing default analysis - JSON array format")
             if dataframes:
                 first_df = list(dataframes.values())[0]
                 print(f"Default analysis on dataframe with columns: {list(first_df.columns)}")
