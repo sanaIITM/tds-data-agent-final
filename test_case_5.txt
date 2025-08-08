@@ -1,0 +1,1 @@
+Count males, count females, highest score, and who got the highest score.

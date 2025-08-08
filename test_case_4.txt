@@ -1,0 +1,1 @@
+Show me a chart of the score distribution by gender.
