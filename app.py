@@ -352,33 +352,109 @@ Questions:
             if dataframes:
                 first_df = list(dataframes.values())[0]
                 print(f"Default analysis on dataframe with columns: {list(first_df.columns)}")
-                plot_b64 = self.create_visualization(first_df)
                 
-                # Generate dynamic array values based on actual data analysis
-                # First value: count of records or relevant metric
-                first_value = first_df.shape[0]
+                # Use LLM to analyze the question and provide exactly what's requested
+                try:
+                    client = get_openai_client()
+                    if client:
+                        # Create data summary for LLM
+                        data_summary = {
+                            "columns": list(first_df.columns),
+                            "shape": first_df.shape,
+                            "sample_data": first_df.head(3).to_dict('records'),
+                            "data_types": first_df.dtypes.to_dict()
+                        }
+                        
+                        prompt = f"""
+You are a data analyst. Given this dataset and question, provide EXACTLY what is requested - nothing more, nothing less.
+
+Dataset:
+- Columns: {data_summary['columns']}
+- Shape: {data_summary['shape']} (rows, columns)
+- Sample data: {data_summary['sample_data']}
+- Data types: {data_summary['data_types']}
+
+Full dataset:
+{first_df.to_string()}
+
+Question: {questions_content}
+
+Analyze the question carefully and determine:
+1. What specific value or metric is being asked for
+2. What format should the response be in
+3. Whether a visualization is requested
+
+Return your response as a JSON array with the exact values requested. If a visualization is requested, include "VISUALIZATION_NEEDED" as the last element.
+
+Examples:
+- If asked "How many records?" return [6]
+- If asked "What is the most common gender?" return ["female"]  
+- If asked "Show age distribution" return [28.5, "mixed", 0.6, "VISUALIZATION_NEEDED"]
+- If asked "Count of males and females" return [3, 3]
+
+Provide only the JSON array, no explanations.
+"""
+                        
+                        response = client.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0,
+                            max_tokens=500
+                        )
+                        
+                        # Parse LLM response
+                        llm_response = response.choices[0].message.content.strip()
+                        print(f"LLM response: {llm_response}")
+                        
+                        # Try to parse as JSON array
+                        try:
+                            import json
+                            result = json.loads(llm_response)
+                            
+                            # Check if visualization is needed
+                            if isinstance(result, list) and len(result) > 0 and result[-1] == "VISUALIZATION_NEEDED":
+                                result.pop()  # Remove the marker
+                                plot_b64 = self.create_visualization(first_df)
+                                result.append(plot_b64)
+                            
+                            return result
+                        except:
+                            # Fallback to basic parsing if JSON fails
+                            pass
+                    
+                    # Fallback if LLM unavailable
+                    print("LLM unavailable, using fallback logic")
+                    
+                except Exception as e:
+                    print(f"LLM error: {e}")
                 
-                # Second value: most common categorical value or relevant insight
-                second_value = "Analysis"
-                for col in first_df.columns:
-                    if first_df[col].dtype == 'object':  # categorical column
-                        most_common = first_df[col].mode()
-                        if len(most_common) > 0:
-                            second_value = str(most_common.iloc[0]).lower()
+                # Fallback: Generate basic response based on question analysis
+                question_lower = questions_content.lower()
+                
+                # Simple keyword-based analysis for common requests
+                if "how many" in question_lower or "count" in question_lower:
+                    return [first_df.shape[0]]
+                elif "most common" in question_lower or "mode" in question_lower:
+                    for col in first_df.columns:
+                        if first_df[col].dtype == 'object':
+                            most_common = first_df[col].mode()
+                            if len(most_common) > 0:
+                                return [str(most_common.iloc[0]).lower()]
                             break
+                elif "average" in question_lower or "mean" in question_lower:
+                    numeric_cols = first_df.select_dtypes(include=['number']).columns
+                    if len(numeric_cols) > 0:
+                        return [round(first_df[numeric_cols[0]].mean(), 2)]
                 
-                # Third value: calculated metric (average, ratio, etc.)
-                third_value = 0.5
-                numeric_cols = first_df.select_dtypes(include=['number']).columns
-                if len(numeric_cols) > 0:
-                    # Use average of first numeric column, normalized to 0-1 range
-                    avg_val = first_df[numeric_cols[0]].mean()
-                    max_val = first_df[numeric_cols[0]].max()
-                    min_val = first_df[numeric_cols[0]].min()
-                    if max_val > min_val:
-                        third_value = round((avg_val - min_val) / (max_val - min_val), 3)
+                # Check if visualization is requested
+                visualization_keywords = ['plot', 'chart', 'graph', 'visualization', 'visualize', 'show', 'create', 'draw']
+                needs_image = any(keyword in question_lower for keyword in visualization_keywords)
                 
-                return [first_value, second_value, third_value, plot_b64]
+                if needs_image:
+                    plot_b64 = self.create_visualization(first_df)
+                    return [first_df.shape[0], "visualization", plot_b64]
+                else:
+                    return [first_df.shape[0]]
             
             print("No dataframes available")
             return [1, "No Data", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
