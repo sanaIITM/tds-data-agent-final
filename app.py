@@ -457,27 +457,44 @@ Provide only the JSON array, no explanations.
                     return [first_df.shape[0]]
             
             print("No dataframes available")
-            # Instead of returning the hardcoded default, use LLM to answer questions.txt
+            
+            # Try answering the question directly with LLM
             try:
                 client = get_openai_client()
                 if client:
+                    # Force simple array answer
+                    prompt = f"""
+Answer the following question with ONLY a valid JSON array containing the direct answer.
+No explanations, no extra fields — only the array.
+
+Example:
+Question: What is 2+2?
+Answer: ["4"]
+
+Question: {questions_content.strip()}
+"""
                     response = client.chat.completions.create(
                         model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": "Answer concisely in JSON array format with exactly 4 elements: [number, text_answer, correlation_value, image_base64]. For simple questions, use [result, 'explanation', 0, '']."},
-                            {"role": "user", "content": questions_content}
-                        ],
+                        messages=[{"role": "user", "content": prompt}],
                         temperature=0,
-                        max_tokens=100
+                        max_tokens=50
                     )
                     llm_response = response.choices[0].message.content.strip()
                     print(f"LLM no-data response: {llm_response}")
-                    return json.loads(llm_response)
+
+                    # Parse to Python list safely
+                    import json as json_lib
+                    result = json_lib.loads(llm_response)
+
+                    # Ensure it's a list
+                    if not isinstance(result, list):
+                        result = [str(result)]
+                    return result
             except Exception as e:
                 print(f"LLM no-data error: {e}")
 
-            # Fallback
-            return [1, "Unable to answer", 0, ""]
+            # Fallback if LLM fails
+            return ["Unable to answer"]
             
         except Exception as e:
             import traceback
