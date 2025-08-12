@@ -464,14 +464,12 @@ Provide only the JSON array, no explanations.
                 if client:
                     # Force simple array answer
                     prompt = f"""
-Answer the following question with ONLY a valid JSON array containing the direct answer.
-No explanations, no extra fields — only the array.
-
-Example:
-Question: What is 2+2?
-Answer: ["4"]
+You must answer the following question and return ONLY a valid JSON array containing the direct answer.
+Do not include any explanations or extra text - just the JSON array.
 
 Question: {questions_content.strip()}
+
+Return your answer as a JSON array like ["12"] for a math problem or ["answer"] for other questions.
 """
                     response = client.chat.completions.create(
                         model="gpt-4o-mini",
