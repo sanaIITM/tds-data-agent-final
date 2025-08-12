@@ -457,7 +457,27 @@ Provide only the JSON array, no explanations.
                     return [first_df.shape[0]]
             
             print("No dataframes available")
-            return [1, "No Data", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
+            # Instead of returning the hardcoded default, use LLM to answer questions.txt
+            try:
+                client = get_openai_client()
+                if client:
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": "Answer concisely in JSON array format with exactly 4 elements: [number, text_answer, correlation_value, image_base64]. For simple questions, use [result, 'explanation', 0, '']."},
+                            {"role": "user", "content": questions_content}
+                        ],
+                        temperature=0,
+                        max_tokens=100
+                    )
+                    llm_response = response.choices[0].message.content.strip()
+                    print(f"LLM no-data response: {llm_response}")
+                    return json.loads(llm_response)
+            except Exception as e:
+                print(f"LLM no-data error: {e}")
+
+            # Fallback
+            return [1, "Unable to answer", 0, ""]
             
         except Exception as e:
             import traceback
