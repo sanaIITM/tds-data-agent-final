@@ -25,7 +25,8 @@ import requests
 from bs4 import BeautifulSoup
 import duckdb
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.encoders import jsonable_encoder
 import aiofiles
 from PIL import Image
@@ -35,6 +36,7 @@ from openai import OpenAI
 # OPENROUTER_API_KEY is required; model/base URL are configurable.
 
 app = FastAPI(title="TDS Data Analyst Agent", version="1.1.0")
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
                                 
 # Initialize OpenAI client (will be initialized when needed to avoid startup errors)
 client = None
@@ -665,10 +667,10 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/")
+@app.get("/", response_class=FileResponse)
 async def root():
-    """Health check endpoint"""
-    return {"message": "TDS Data Analyst Agent is running"}
+    """Serve the browser-based data analysis workspace."""
+    return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 if __name__ == "__main__":
     import uvicorn
