@@ -244,11 +244,6 @@
       questionInput.focus();
       return;
     }
-    if (!selectedFiles.length) {
-      showError("Add at least one dataset file to analyze.");
-      return;
-    }
-
     const payload = new FormData();
     payload.append("questions.txt", new Blob([question], { type: "text/plain;charset=utf-8" }), "questions.txt");
     selectedFiles.forEach((file, index) => payload.append("data_file_" + index, file, file.name));
