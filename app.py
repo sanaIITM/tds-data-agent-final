@@ -376,7 +376,7 @@ Questions:
                                 for question in questions_list:
                                     result[question] = parsed_answers.get(question, "Unable to analyze")
                             else:
-                                answers = raw_answers.strip().split("\\n")
+                                answers = raw_answers.strip().splitlines()
                                 for i, question in enumerate(questions_list):
                                     answer = answers[i].strip() if i < len(answers) else ""
                                     if answer.startswith(f"{i + 1}."):
