@@ -58,7 +58,7 @@ def test_oversized_file_respects_configured_limit(monkeypatch):
 
 def test_memory_guard_rejects_dataset_before_pandas_load(monkeypatch, tmp_path):
     dataset = tmp_path / "large.csv"
-    dataset.write_bytes(b"value\n" + (b"1\n" * 1024))
+    dataset.write_bytes(b"value\n" + (b"1\n" * (2 * 1024 * 1024)))
     monkeypatch.setattr(app_module, "get_available_memory_bytes", lambda: 100 * 1024 * 1024)
     monkeypatch.setenv("DATA_MEMORY_MULTIPLIER", "3")
     monkeypatch.setenv("MIN_MEMORY_RESERVE_BYTES", str(96 * 1024 * 1024))
