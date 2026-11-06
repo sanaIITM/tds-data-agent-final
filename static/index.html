@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8fc">
+  <meta name="description" content="Upload a dataset, ask a question, and get AI-assisted data analysis with TDS Data Analyst.">
+  <title>TDS Data Analyst — Explore your data</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="TDS Data Analyst home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><rect x="3" y="3" width="26" height="26" rx="9" fill="currentColor" opacity=".13"/><path d="M9 21V11h3.2c3.2 0 5 1.8 5 5s-1.8 5-5 5H9Zm3-2.3c1.5 0 2.3-.9 2.3-2.7s-.8-2.7-2.3-2.7h-.2v5.4h.2ZM19 21v-7.4h-2.5V11h7.8v2.6h-2.5V21H19Z" fill="currentColor"/></svg>
+        </span>
+        <span class="brand-copy"><strong>TDS</strong><span>DATA ANALYST</span></span>
+      </a>
+      <div class="topbar-right">
+        <span class="model-chip"><span class="chip-dot"></span> OpenRouter · Gemma 4</span>
+        <span class="api-status" id="apiStatus"><span class="status-dot"></span><span>Checking API</span></span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="eyebrow"><span class="eyebrow-line"></span> YOUR DATA, WITH CONTEXT</div>
+        <h1>Make your data<br><span>make sense.</span></h1>
+        <p class="hero-copy">Bring a dataset, ask a question in plain language, and get a focused answer with visualizations when they help.</p>
+      </section>
+
+      <div class="workspace">
+        <section class="work-column">
+          <form id="analysisForm" novalidate>
+            <section class="panel question-panel">
+              <div class="panel-heading">
+                <div class="step-number">01</div>
+                <div><h2>What would you like to know?</h2><p>Write one or more questions about your data.</p></div>
+              </div>
+              <label class="sr-only" for="questions">Your analysis question</label>
+              <textarea id="questions" name="questions" rows="5" maxlength="12000" placeholder="e.g. Which product category generated the highest revenue? Show monthly sales trends and identify any unusual patterns." required></textarea>
+              <div class="prompt-footer">
+                <span class="micro-copy"><span class="tiny-spark">✳</span> Be specific about the metrics, groups, or comparisons you need.</span>
+                <span class="char-count" id="charCount">0 / 12,000</span>
+              </div>
+              <div class="example-row">
+                <span class="example-label">TRY AN EXAMPLE</span>
+                <button type="button" class="example-pill" data-prompt="How many rows are in this dataset, and what are the column names?">Dataset overview</button>
+                <button type="button" class="example-pill" data-prompt="Find the strongest relationship between numeric columns and create a scatter plot with a regression line.">Correlation & plot</button>
+                <button type="button" class="example-pill" data-prompt="Summarize the key trends, unusual values, and most important insights in this dataset.">Key insights</button>
+              </div>
+            </section>
+
+            <section class="panel upload-panel">
+              <div class="panel-heading">
+                <div class="step-number">02</div>
+                <div><h2>Add your dataset</h2><p>Upload one or more files to give the analysis context.</p></div>
+                <span class="optional-tag">OPTIONAL</span>
+              </div>
+              <input id="fileInput" type="file" multiple accept=".csv,.xlsx,.xls,.json,.parquet,.zip,.tar.gz,.tgz" hidden>
+              <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Choose or drop data files">
+                <div class="upload-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15.5v3A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="drop-title">Drop files here, or <span>browse</span></div>
+                <div class="drop-subtitle">CSV, Excel, JSON, Parquet, ZIP or TAR.GZ</div>
+                <div class="upload-limits">Up to 25 MB per file · 50 MB total</div>
+              </div>
+              <div id="fileList" class="file-list" aria-live="polite"></div>
+              <div class="privacy-note"><span class="lock-icon" aria-hidden="true">⌑</span> Files are processed for this request in temporary storage and then removed.</div>
+            </section>
+
+            <div class="action-row">
+              <button class="run-button" id="runButton" type="submit">
+                <span class="button-label">Run analysis</span>
+                <svg class="button-arrow" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10h11m-4-4 4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="reset-button" id="resetButton" type="button">Clear all</button>
+              <span class="action-hint">Analysis may take a little while for larger files.</span>
+            </div>
+          </form>
+
+          <section class="panel results-panel" id="resultsPanel" hidden aria-live="polite">
+            <div class="results-heading">
+              <div class="panel-heading compact-heading">
+                <div class="step-number result-step">03</div>
+                <div><h2>Analysis results</h2><p id="resultMeta">Your results will appear here.</p></div>
+              </div>
+              <div class="result-actions">
+                <button id="copyButton" class="utility-button" type="button">Copy JSON</button>
+                <button id="downloadButton" class="utility-button" type="button">Download</button>
+              </div>
+            </div>
+            <div id="resultContent" class="result-content"></div>
+          </section>
+
+          <div class="error-box" id="errorBox" role="alert" hidden></div>
+        </section>
+
+        <aside class="side-column">
+          <section class="side-card capabilities-card">
+            <div class="side-kicker">BUILT FOR ANALYSIS</div>
+            <h3>A little help<br>from your data.</h3>
+            <div class="capability-list">
+              <div class="capability-item"><span class="capability-icon violet">▦</span><div><strong>Multiple formats</strong><span>Work with spreadsheets, structured data and archives.</span></div></div>
+              <div class="capability-item"><span class="capability-icon blue">⌁</span><div><strong>Plain-language questions</strong><span>Describe the answer you need, not the code to write.</span></div></div>
+              <div class="capability-item"><span class="capability-icon peach">◒</span><div><strong>Visual explanations</strong><span>Get charts when a visual makes the result clearer.</span></div></div>
+            </div>
+          </section>
+
+          <section class="side-card workflow-card">
+            <div class="side-kicker">HOW IT WORKS</div>
+            <ol class="workflow-list">
+              <li><span>1</span><div><strong>Ask</strong><small>Describe the task or insight.</small></div></li>
+              <li><span>2</span><div><strong>Upload</strong><small>Add the files you want analyzed.</small></div></li>
+              <li><span>3</span><div><strong>Explore</strong><small>Review answers and generated charts.</small></div></li>
+            </ol>
+          </section>
+
+          <div class="format-card">
+            <div class="format-top"><span>SUPPORTED INPUTS</span><span class="format-count">06</span></div>
+            <div class="format-tags"><span>.CSV</span><span>.XLSX</span><span>.XLS</span><span>.JSON</span><span>.PARQUET</span><span>.ZIP / .TGZ</span></div>
+            <p>Archives are unpacked with file-path and expansion safeguards.</p>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>© TDS DATA ANALYST</span>
+      <span>Built for thoughtful data exploration</span>
+      <a href="/docs" target="_blank" rel="noreferrer">API documentation ↗</a>
+    </footer>
+  </div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
