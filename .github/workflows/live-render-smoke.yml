@@ -1,0 +1,103 @@
+name: Live Render API smoke test
+
+on:
+  push:
+    branches:
+      - smoke-test-render-live-nov06-2026
+
+permissions:
+  contents: read
+
+jobs:
+  live-api-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Prepare small CSV and visualization question
+        run: |
+          cat > questions.txt <<'EOF'
+          Create a scatter plot showing the relationship between study hours and exam scores. Include the visualization in the final JSON array.
+          EOF
+          cat > sample.csv <<'EOF'
+          StudyHours,ExamScore
+          1,45
+          2,50
+          3,55
+          4,65
+          5,68
+          6,72
+          7,80
+          8,85
+          9,90
+          10,95
+          EOF
+
+      - name: Call live Render API
+        id: request
+        run: |
+          status=$(curl --silent --show-error --location \
+            --retry 3 --retry-all-errors --retry-delay 5 \
+            --max-time 240 \
+            --output response.json --write-out '%{http_code}' \
+            --request POST 'https://tds-data-agent-final-63w7.onrender.com/api/' \
+            --form 'questions.txt=@questions.txt;type=text/plain' \
+            --form 'data=@sample.csv;type=text/csv')
+          echo "http_status=$status" >> "$GITHUB_OUTPUT"
+          echo "HTTP status: $status"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "API returned a non-success HTTP status. Sanitized response:"
+            head -c 1500 response.json || true
+            exit 1
+          fi
+
+      - name: Validate JSON and chart payload
+        run: |
+          python - <<'PY'
+          import base64, json
+          from pathlib import Path
+
+          raw = Path("response.json").read_text(encoding="utf-8")
+          try:
+              result = json.loads(raw)
+          except Exception as exc:
+              print("FAIL: API response was not valid JSON:", repr(exc))
+              print(raw[:1200])
+              raise SystemExit(1)
+
+          if not isinstance(result, list):
+              print("FAIL: expected a JSON array, received", type(result).__name__)
+              print(str(result)[:1200])
+              raise SystemExit(1)
+
+          image = result[-1] if result else None
+          if not isinstance(image, str) or not image.startswith("data:image/"):
+              print("FAIL: response did not end with a chart data URL.")
+              print("Response item types:", [type(x).__name__ for x in result])
+              print("Response preview:", str(result)[:1200])
+              raise SystemExit(1)
+
+          try:
+              header, encoded = image.split(",", 1)
+              blob = base64.b64decode(encoded, validate=True)
+          except Exception as exc:
+              print("FAIL: invalid image data URL:", repr(exc))
+              raise SystemExit(1)
+
+          if header not in ("data:image/png;base64", "data:image/webp;base64"):
+              print("FAIL: unexpected image MIME type:", header)
+              raise SystemExit(1)
+          if header.endswith("png;base64") and not blob.startswith(b"\x89PNG\r\n\x1a\n"):
+              print("FAIL: PNG signature mismatch")
+              raise SystemExit(1)
+          if header.endswith("webp;base64") and not (blob.startswith(b"RIFF") and blob[8:12] == b"WEBP"):
+              print("FAIL: WebP signature mismatch")
+              raise SystemExit(1)
+          if len(blob) > 100_000:
+              print("FAIL: chart image exceeded 100 KB:", len(blob))
+              raise SystemExit(1)
+
+          print("PASS: live /api/ request returned valid JSON.")
+          print("PASS: response contained a valid", header.split(":")[1].split(";")[0], "chart.")
+          print("PASS: decoded image size:", len(blob), "bytes.")
+          print("PASS: JSON response items:", len(result))
+          PY
