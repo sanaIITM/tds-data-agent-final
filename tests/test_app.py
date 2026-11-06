@@ -14,7 +14,12 @@ from app import DataAnalyst, app, get_llm_model, parse_json_response
 client = TestClient(app)
 
 def test_root_and_health_endpoints():
-    assert client.get("/").status_code == 200
+    home = client.get("/")
+    assert home.status_code == 200
+    assert home.headers["content-type"].startswith("text/html")
+    assert "Make your data" in home.text
+    assert client.get("/static/app.css").status_code == 200
+    assert client.get("/static/app.js").status_code == 200
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
