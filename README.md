@@ -20,6 +20,19 @@ The application uses the OpenAI Python SDK as an OpenAI-compatible client, confi
 - Configurable OpenRouter model and request timeout
 - Render health endpoint at GET /health
 
+## Browser interface
+
+Open the live application at **https://tds-data-agent-final-63w7.onrender.com**.
+
+The homepage provides a browser-based workspace where you can:
+- Write one or more questions in plain language.
+- Upload CSV, Excel, JSON, Parquet, ZIP or TAR.GZ files.
+- Run an analysis against the existing `POST /api/` endpoint.
+- View structured answers and generated charts.
+- Copy or download the JSON response.
+
+The dataset upload is optional for question-only requests. The API route and its existing JSON response formats remain available for integrations.
+
 ## Configuration
 
 Create a local .env file for development (it is ignored by Git), or add these variables in Render:
