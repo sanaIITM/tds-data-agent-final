@@ -50,6 +50,7 @@ def get_openai_client():
             base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "90")),
             max_retries=2,
+            default_headers={"X-Title": os.getenv("OPENROUTER_APP_NAME", "TDS Data Analyst Agent")},
         )
     return client
 
@@ -63,6 +64,25 @@ def chat_completion(client_instance, **kwargs):
     """Create a chat completion using the configured OpenRouter model."""
     kwargs["model"] = get_llm_model()
     return client_instance.chat.completions.create(**kwargs)
+
+def parse_json_response(raw: str):
+    """Parse JSON from a model response, including fenced JSON output."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("The model returned an empty response")
+    cleaned = raw.strip()
+    if cleaned.startswith(chr(96) * 3):
+        lines = cleaned.splitlines()
+        if len(lines) >= 3 and lines[-1].strip().startswith(chr(96) * 3):
+            cleaned = "\n".join(lines[1:-1]).strip()
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(cleaned):
+        if char in "[{":
+            try:
+                value, _ = decoder.raw_decode(cleaned[index:])
+                return value
+            except json.JSONDecodeError:
+                continue
+    raise ValueError("The model response did not contain valid JSON")
 
 class DataAnalyst:
     def __init__(self):
@@ -133,7 +153,7 @@ class DataAnalyst:
                     max_tokens=500
                 )
                 
-                analysis = json.loads(response.choices[0].message.content)
+                analysis = parse_json_response(response.choices[0].message.content or '')
                 return analysis
             
         except Exception as e:
@@ -342,7 +362,7 @@ Questions:
                             )
                             
                             # Parse LLM response and map to questions
-                            answers = response.choices[0].message.content.strip().split('\n')
+                            answers = (response.choices[0].message.content or '').strip().split('\n')
                             for i, question in enumerate(questions_list):
                                 if i < len(answers) and answers[i].strip():
                                     answer = answers[i].strip()
@@ -431,13 +451,13 @@ Provide only the JSON array, no explanations.
                         )
                         
                         # Parse LLM response
-                        llm_response = response.choices[0].message.content.strip()
+                        llm_response = (response.choices[0].message.content or '').strip()
                         print(f"LLM response: {llm_response}")
                         
                         # Try to parse as JSON array
                         try:
                             import json
-                            result = json.loads(llm_response)
+                            result = parse_json_response(llm_response)
                             
                             # Check if visualization is needed
                             if isinstance(result, list) and len(result) > 0 and result[-1] == "VISUALIZATION_NEEDED":
@@ -509,7 +529,7 @@ Return your answer as a JSON array like ["12"] for a math problem or ["answer"] 
 
                     # Parse to Python list safely
                     import json as json_lib
-                    result = json_lib.loads(llm_response)
+                    result = parse_json_response(llm_response)
 
                     # Ensure it's a list
                     if not isinstance(result, list):
