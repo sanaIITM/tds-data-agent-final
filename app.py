@@ -354,7 +354,7 @@ Dataset rows (complete when small; otherwise a representative sample):
 Whole-dataset descriptive statistics:
 {summary_statistics}
 
-Answer each question with a precise, factual response. Number your answers (1., 2., etc.) and provide only direct answers without explanations.
+Answer only from the provided dataset context. Return a valid JSON object whose keys are the exact questions and whose values are concise answers. Do not invent values when the supplied context is insufficient.
 
 Questions:
 {chr(10).join([f"{i+1}. {q}" for i, q in enumerate(questions_list)])}
@@ -366,28 +366,28 @@ Questions:
                                 max_tokens=1000
                             )
                             
-                            # Parse LLM response and map to questions
-                            answers = (response.choices[0].message.content or '').strip().split('\n')
-                            for i, question in enumerate(questions_list):
-                                if i < len(answers) and answers[i].strip():
-                                    answer = answers[i].strip()
-                                    # Remove numbering from answer if present
-                                    if answer.startswith(f"{i+1}."):
-                                        answer = answer[len(f"{i+1}."):].strip()
-                                    
-                                    # Try to convert to appropriate type
-                                    try:
-                                        if answer.replace('.', '').replace('-', '').replace(',', '').isdigit():
-                                            result[question] = float(answer.replace(',', '')) if '.' in answer else int(answer.replace(',', ''))
-                                        elif answer.startswith('[') and answer.endswith(']'):
-                                            result[question] = json.loads(answer)  # Parse list format
-                                        else:
+                            # Parse structured JSON first; fall back to numbered text if needed.
+                            raw_answers = response.choices[0].message.content or ""
+                            try:
+                                parsed_answers = parse_json_response(raw_answers)
+                            except ValueError:
+                                parsed_answers = None
+                            if isinstance(parsed_answers, dict):
+                                for question in questions_list:
+                                    result[question] = parsed_answers.get(question, "Unable to analyze")
+                            else:
+                                answers = raw_answers.strip().split("\\n")
+                                for i, question in enumerate(questions_list):
+                                    answer = answers[i].strip() if i < len(answers) else ""
+                                    if answer.startswith(f"{i + 1}."):
+                                        answer = answer[len(f"{i + 1}."):].strip()
+                                    if not answer:
+                                        result[question] = "Unable to analyze"
+                                    else:
+                                        try:
+                                            result[question] = json.loads(answer) if answer.startswith(("[", "{")) else answer
+                                        except json.JSONDecodeError:
                                             result[question] = answer
-                                    except:
-                                        result[question] = answer
-                                else:
-                                    result[question] = "Unable to analyze"
-                        
                         else:
                             # Fallback to basic pattern matching if no LLM available
                             for question in questions_list:
