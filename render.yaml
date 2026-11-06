@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: tds-data-agent-final
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: OPENROUTER_MODEL
+        value: google/gemma-4-26b-a4b-it
+      - key: LLM_TIMEOUT_SECONDS
+        value: "90"
