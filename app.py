@@ -28,9 +28,8 @@ import aiofiles
 from PIL import Image
 from openai import OpenAI
 
-# AI Pipe environment variables (set these in your deployment environment)
-# OPENAI_API_KEY should be set as environment variable
-# OPENAI_BASE_URL should be set as environment variable
+# OpenRouter configuration (set these in your deployment environment)
+# OPENROUTER_API_KEY is required; model/base URL are configurable.
 
 app = FastAPI(title="TDS Data Analyst Agent", version="1.0.0")
                                 
@@ -38,18 +37,30 @@ app = FastAPI(title="TDS Data Analyst Agent", version="1.0.0")
 client = None
 
 def get_openai_client():
+    """Return an OpenAI-compatible client configured for OpenRouter."""
     global client
     if client is None:
-        try:
-            client = OpenAI(
-                api_key=os.environ["OPENAI_API_KEY"],
-                base_url=os.environ["OPENAI_BASE_URL"]
-            )
-        except Exception as e:
-            print(f"OpenAI client initialization error: {e}")
-            # Create a mock client for fallback
-            client = None
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        client = OpenAI(
+            api_key=api_key,
+            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "90")),
+            max_retries=2,
+        )
     return client
+
+
+def get_llm_model() -> str:
+    """Return the configured OpenRouter model."""
+    return os.getenv("OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it")
+
+
+def chat_completion(client_instance, **kwargs):
+    """Create a chat completion using the configured OpenRouter model."""
+    kwargs["model"] = get_llm_model()
+    return client_instance.chat.completions.create(**kwargs)
 
 class DataAnalyst:
     def __init__(self):
@@ -61,12 +72,26 @@ class DataAnalyst:
         extracted_files = []
         
         try:
+            destination = Path(extract_to).resolve()
+
+            def safe_target(member_name: str) -> Path:
+                target = (destination / member_name).resolve()
+                if target != destination and destination not in target.parents:
+                    raise ValueError(f"Unsafe archive member path: {member_name}")
+                return target
+
             if file_path.endswith('.zip'):
                 with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                    zip_ref.extractall(extract_to)
+                    for member in zip_ref.infolist():
+                        safe_target(member.filename)
+                    zip_ref.extractall(destination)
             elif file_path.endswith(('.tar.gz', '.tgz')):
                 with tarfile.open(file_path, 'r:gz') as tar_ref:
-                    tar_ref.extractall(extract_to)
+                    for member in tar_ref.getmembers():
+                        safe_target(member.name)
+                        if member.issym() or member.islnk():
+                            raise ValueError(f"Archive links are not allowed: {member.name}")
+                    tar_ref.extractall(destination)
             
             # Recursively find all extracted files
             for root, dirs, files in os.walk(extract_to):
@@ -84,9 +109,8 @@ class DataAnalyst:
         try:
             openai_client = get_openai_client()
             if openai_client:
-                response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
+                response = chat_completion(openai_client,
+                                        messages=[
                         {"role": "system", "content": "Analyze the problem statement and determine: 1) If web scraping is needed, 2) What data sources to use, 3) What analysis is required, 4) Expected output format. Return JSON with keys: needs_web_scraping, data_sources, analysis_type, output_format"},
                         {"role": "user", "content": f"Problem statement: {questions_content}"}
                     ],
@@ -305,9 +329,8 @@ Questions:
 {chr(10).join([f"{i+1}. {q}" for i, q in enumerate(questions_list)])}
 """
                             
-                            response = client.chat.completions.create(
-                                model="gpt-3.5-turbo",
-                                messages=[{"role": "user", "content": prompt}],
+                            response = chat_completion(client,
+                                                                messages=[{"role": "user", "content": prompt}],
                                 temperature=0,
                                 max_tokens=1000
                             )
@@ -395,9 +418,8 @@ Examples:
 Provide only the JSON array, no explanations.
 """
                         
-                        response = client.chat.completions.create(
-                            model="gpt-3.5-turbo",
-                            messages=[{"role": "user", "content": prompt}],
+                        response = chat_completion(client,
+                                                        messages=[{"role": "user", "content": prompt}],
                             temperature=0,
                             max_tokens=500
                         )
@@ -471,9 +493,8 @@ Question: {questions_content.strip()}
 
 Return your answer as a JSON array like ["12"] for a math problem or ["answer"] for other questions.
 """
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}],
+                    response = chat_completion(client,
+                                                messages=[{"role": "user", "content": prompt}],
                         temperature=0,
                         max_tokens=50
                     )
