@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 #app.py
 #key value pair edit 
 import os
@@ -15,21 +17,11 @@ from urllib.parse import urlparse
 from typing import List, Dict, Any, Union
 import asyncio
 
-import pandas as pd
-import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
-import requests
-from bs4 import BeautifulSoup
-import duckdb
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.encoders import jsonable_encoder
 import aiofiles
-from PIL import Image
 from openai import OpenAI
 
 # OpenRouter configuration (set these in your deployment environment)
@@ -86,6 +78,54 @@ def parse_json_response(raw: str):
             except json.JSONDecodeError:
                 continue
     raise ValueError("The model response did not contain valid JSON")
+
+def get_available_memory_bytes():
+    """Return remaining cgroup memory in bytes, or None when no cgroup limit is exposed."""
+    cgroup_paths = (
+        ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+        ("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+    )
+    for limit_path, usage_path in cgroup_paths:
+        try:
+            limit_text = Path(limit_path).read_text(encoding="ascii").strip()
+            usage_text = Path(usage_path).read_text(encoding="ascii").strip()
+            if limit_text == "max":
+                continue
+            limit = int(limit_text)
+            usage = int(usage_text)
+            if limit <= 0 or limit >= (1 << 60):
+                continue
+            return max(0, limit - usage)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def guard_dataset_memory(file_paths: List[str]) -> None:
+    """Reject a dataset before parsing if its estimated working set exceeds free memory."""
+    dataset_bytes = sum(Path(path).stat().st_size for path in file_paths if Path(path).is_file())
+    if dataset_bytes <= 0:
+        return
+
+    available_bytes = get_available_memory_bytes()
+    if available_bytes is None:
+        return
+
+    multiplier = max(1.0, float(os.getenv("DATA_MEMORY_MULTIPLIER", "3.0")))
+    reserve_bytes = max(0, int(os.getenv("MIN_MEMORY_RESERVE_BYTES", str(96 * 1024 * 1024))))
+    estimated_bytes = int(dataset_bytes * multiplier)
+    if estimated_bytes + reserve_bytes > available_bytes:
+        dataset_mb = dataset_bytes / (1024 * 1024)
+        available_mb = available_bytes / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"This dataset is {dataset_mb:.1f} MiB, but the service currently has "
+                f"only {available_mb:.1f} MiB of free memory. To prevent the service "
+                "from restarting, use a smaller dataset or a higher-memory instance."
+            ),
+        )
+
 
 class DataAnalyst:
     def __init__(self):
@@ -173,6 +213,9 @@ class DataAnalyst:
     
     async def scrape_web_data(self, url: str) -> pd.DataFrame:
         """Load tables from an explicit HTTPS Wikipedia URL."""
+        import pandas as pd
+        import requests
+        from bs4 import BeautifulSoup
         try:
             parsed = urlparse(url)
             if parsed.scheme != "https" or parsed.hostname != "en.wikipedia.org":
@@ -196,6 +239,8 @@ class DataAnalyst:
         return pd.DataFrame()
     async def process_local_files(self, file_paths: List[str]) -> Dict[str, pd.DataFrame]:
         """Process local files and return DataFrames"""
+        import pandas as pd
+        import duckdb
         dataframes = {}
         
         for file_path in file_paths:
@@ -230,6 +275,12 @@ class DataAnalyst:
     
     def create_visualization(self, data: pd.DataFrame, plot_type: str = "scatter") -> str:
         """Create visualization and return base64 encoded PNG"""
+        import numpy as np
+        import pandas as pd
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from PIL import Image
         try:
             plt.figure(figsize=(10, 6))
             plt.style.use('default')
@@ -250,13 +301,12 @@ class DataAnalyst:
 
                     if len(plot_data) > 1:
                         
-                        # Fit regression
-                        reg = LinearRegression()
-                        reg.fit(x_vals.values.reshape(-1, 1), y_vals.values)
-                        
+                        # Fit a simple least-squares line without importing scikit-learn.
+                        slope, intercept = np.polyfit(x_vals.to_numpy(dtype=float), y_vals.to_numpy(dtype=float), 1)
+
                         # Plot regression line
                         x_range = np.linspace(x_vals.min(), x_vals.max(), 100)
-                        y_pred = reg.predict(x_range.reshape(-1, 1))
+                        y_pred = slope * x_range + intercept
                         plt.plot(x_range, y_pred, linestyle=":", color="red", linewidth=2)
                     
                     plt.xlabel(x_col)
@@ -303,6 +353,7 @@ class DataAnalyst:
     
     async def analyze_data(self, dataframes: Dict[str, pd.DataFrame], questions_content: str) -> Union[List, Dict]:
         """Perform data analysis based on questions - fully generalized for any dataset"""
+        import pandas as pd
         print(f"Starting analysis with {len(dataframes)} dataframes")
         print(f"Questions content: {questions_content[:100]}...")
         
@@ -565,8 +616,19 @@ Return your answer as a JSON array like ["12"] for a math problem or ["answer"] 
             print(f"Analysis traceback: {traceback.format_exc()}")
             raise RuntimeError("Data analysis failed; see server logs for the underlying exception.") from e
 
+_analysis_lock = asyncio.Lock()
+
+
 @app.post("/api/")
 async def analyze_data_endpoint(request: Request):
+    """Limit heavy analysis to one request at a time on small instances."""
+    if _analysis_lock.locked():
+        raise HTTPException(status_code=429, detail="Another analysis is already running. Please retry when it finishes.")
+    async with _analysis_lock:
+        return await _analyze_data_request(request)
+
+
+async def _analyze_data_request(request: Request):
     """Analyze uploaded files against questions.txt and return JSON results."""
     analyst = DataAnalyst()
     max_file_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(150 * 1024 * 1024)))
@@ -635,6 +697,7 @@ async def analyze_data_endpoint(request: Request):
                 elif extension in supported_extensions:
                     local_files.append(file_path)
 
+            guard_dataset_memory(local_files)
             analysis_plan = await analyst.parse_questions_file(questions_content)
             dataframes = await analyst.process_local_files(local_files) if local_files else {}
 
