@@ -732,6 +732,7 @@ async def health():
 
 
 @app.get("/", response_class=FileResponse)
+@app.head("/", response_class=FileResponse)
 async def root():
     """Serve the browser-based data analysis workspace."""
     return FileResponse(Path(__file__).parent / "static" / "index.html")
