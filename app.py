@@ -242,14 +242,11 @@ class DataAnalyst:
                     plt.scatter(data[x_col], data[y_col], alpha=0.6)
                     
                     # Add regression line
-                    x_vals = data[x_col].dropna()
-                    y_vals = data[y_col].dropna()
-                    
-                    if len(x_vals) > 1 and len(y_vals) > 1:
-                        # Ensure same length
-                        min_len = min(len(x_vals), len(y_vals))
-                        x_vals = x_vals.iloc[:min_len]
-                        y_vals = y_vals.iloc[:min_len]
+                    plot_data = data[[x_col, y_col]].apply(pd.to_numeric, errors="coerce").dropna()
+                    x_vals = plot_data[x_col]
+                    y_vals = plot_data[y_col]
+
+                    if len(plot_data) > 1:
                         
                         # Fit regression
                         reg = LinearRegression()
@@ -264,24 +261,28 @@ class DataAnalyst:
                     plt.ylabel(y_col)
                     plt.title(f"{y_col} vs {x_col}")
             
-            # Save to bytes
+            # Keep visualization payloads within the 100 KB target where possible.
             buffer = io.BytesIO()
-            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-            buffer.seek(0)
-            
-            # Compress if needed
-            img = Image.open(buffer)
-            if buffer.getbuffer().nbytes > 100000:  # 100KB
-                # Reduce quality
-                buffer = io.BytesIO()
-                img.save(buffer, format='PNG', optimize=True, quality=85)
-                buffer.seek(0)
-            
-            # Encode to base64
-            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            plt.close()
-            
-            return f"data:image/png;base64,{img_base64}"
+            plt.savefig(buffer, format="png", dpi=100, bbox_inches="tight")
+            image_bytes = buffer.getvalue()
+            plt.close("all")
+
+            if len(image_bytes) <= 95000:
+                return "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            for dimensions, quality in [((900, 600), 78), ((720, 480), 68), ((560, 380), 58), ((420, 300), 48)]:
+                image.thumbnail(dimensions)
+                compressed = io.BytesIO()
+                image.save(compressed, format="WEBP", quality=quality, method=6)
+                if compressed.tell() <= 95000:
+                    return "data:image/webp;base64," + base64.b64encode(compressed.getvalue()).decode("ascii")
+
+            # Final bounded-size fallback for unusually complex charts.
+            image.thumbnail((320, 240))
+            compressed = io.BytesIO()
+            image.save(compressed, format="WEBP", quality=35, method=6)
+            return "data:image/webp;base64," + base64.b64encode(compressed.getvalue()).decode("ascii")
             
         except Exception as e:
             print(f"Visualization error: {e}")
