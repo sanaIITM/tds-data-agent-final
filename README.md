@@ -2,6 +2,10 @@
 
 A fully compliant Python API for automated data analysis and visualization, designed for evaluation systems.
 
+## Live Deployment
+
+**Render API URL:** https://tds-data-agent-final-63w7.onrender.com
+
 ## Features
 
 - **Multi-format Data Processing**: Handles CSV, Excel, JSON, Parquet, ZIP, TAR.GZ files
@@ -26,7 +30,7 @@ Accepts multipart form data with:
 [1, "Titanic", 0.485782, "data:image/png;base64,..."]
 ```
 
-**Case B - JSON Object:**
+**Case B - JSON Object**
 ```json
 {
   "Which high court disposed the most cases from 2019 - 2022?": "Delhi High Court",
@@ -97,7 +101,7 @@ curl -X POST "http://localhost:8000/api/" \
 ## Performance Features
 
 - Asynchronous file processing
-- Efficient memory usage for large datasets
+- Efficient memory usage for large files
 - Automatic image compression (<100KB)
 - Graceful error handling
 - Deterministic output generation
@@ -112,6 +116,5 @@ curl -X POST "http://localhost:8000/api/" \
 ## License
 
 MIT License - see LICENSE file for details
-
 
 ## Author : Sana Bint Salim
