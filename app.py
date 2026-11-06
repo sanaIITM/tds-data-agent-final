@@ -471,8 +471,12 @@ Provide only the JSON array, no explanations.
                             import json
                             result = parse_json_response(llm_response)
                             
+                            # The array-format endpoint must always return a JSON array.
+                            if not isinstance(result, list):
+                                result = [result]
+
                             # Check if visualization is needed
-                            if isinstance(result, list) and len(result) > 0 and result[-1] == "VISUALIZATION_NEEDED":
+                            if len(result) > 0 and result[-1] == "VISUALIZATION_NEEDED":
                                 result.pop()  # Remove the marker
                                 plot_b64 = self.create_visualization(first_df)
                                 result.append(plot_b64)
@@ -557,8 +561,7 @@ Return your answer as a JSON array like ["12"] for a math problem or ["answer"] 
             import traceback
             print(f"Analysis error: {e}")
             print(f"Analysis traceback: {traceback.format_exc()}")
-            # Return safe default with proper encoding
-            return [1, "Error", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
+            raise RuntimeError("Data analysis failed; see server logs for the underlying exception.") from e
 
 @app.post("/api/")
 async def analyze_data_endpoint(request: Request):
