@@ -21,7 +21,7 @@ def test_default_model_is_gemma_4(monkeypatch):
     assert get_llm_model() == "google/gemma-4-26b-a4b-it"
 
 def test_missing_questions_file_is_bad_request():
-    response = client.post("/api/", files={"data.csv": ("data.csv", b"value\\n1\\n", "text/csv")})
+    response = client.post("/api/", files={"data.csv": ("data.csv", b"value\n1\n", "text/csv")})
     assert response.status_code == 400
 
 def test_csv_upload_works_without_an_api_key(monkeypatch):
@@ -30,7 +30,7 @@ def test_csv_upload_works_without_an_api_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it")
     files = {
         "questions.txt": ("questions.txt", b"How many rows are in the dataset?", "text/plain"),
-        "data.csv": ("../safe-name.csv", b"value\\n10\\n20\\n30\\n", "text/csv"),
+        "data.csv": ("../safe-name.csv", b"value\n10\n20\n30\n", "text/csv"),
     }
     response = client.post("/api/", files=files)
     assert response.status_code == 200
@@ -54,7 +54,7 @@ def test_safe_zip_extracts_supported_file():
         archive_path = root / "valid.zip"
         extraction_path = root / "extracted"
         with zipfile.ZipFile(archive_path, "w") as archive:
-            archive.writestr("dataset.csv", "value\\n1\\n2\\n")
+            archive.writestr("dataset.csv", "value\n1\n2\n")
         analyst = DataAnalyst()
         extracted = asyncio.run(analyst.extract_archive(str(archive_path), str(extraction_path)))
         assert len(extracted) == 1
