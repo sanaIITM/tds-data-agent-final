@@ -5,7 +5,7 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /
+    healthCheckPath: /health
     envVars:
       - key: OPENROUTER_API_KEY
         sync: false
@@ -14,4 +14,14 @@ services:
       - key: OPENROUTER_MODEL
         value: google/gemma-4-26b-a4b-it
       - key: LLM_TIMEOUT_SECONDS
-        value: "90"
+        value: '90'
+      - key: MAX_UPLOAD_BYTES
+        value: '26214400'
+      - key: MAX_TOTAL_UPLOAD_BYTES
+        value: '52428800'
+      - key: MAX_QUESTIONS_BYTES
+        value: '524288'
+      - key: MAX_ARCHIVE_ENTRIES
+        value: '2000'
+      - key: MAX_ARCHIVE_UNPACKED_BYTES
+        value: '104857600'
