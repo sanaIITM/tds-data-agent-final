@@ -1,9 +1,9 @@
 name: Live Render API smoke test
 
 on:
-  push:
+  pull_request:
     branches:
-      - smoke-test-render-live-nov06-2026
+      - main
 
 permissions:
   contents: read
@@ -33,7 +33,6 @@ jobs:
           EOF
 
       - name: Call live Render API
-        id: request
         run: |
           status=$(curl --silent --show-error --location \
             --retry 3 --retry-all-errors --retry-delay 5 \
@@ -42,7 +41,6 @@ jobs:
             --request POST 'https://tds-data-agent-final-63w7.onrender.com/api/' \
             --form 'questions.txt=@questions.txt;type=text/plain' \
             --form 'data=@sample.csv;type=text/csv')
-          echo "http_status=$status" >> "$GITHUB_OUTPUT"
           echo "HTTP status: $status"
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
             echo "API returned a non-success HTTP status. Sanitized response:"
