@@ -324,10 +324,12 @@ class DataAnalyst:
                 
                 # Process each dataframe to answer questions using LLM
                 if dataframes:
-                    first_df = list(dataframes.values())[0]
+                    first_df = pd.concat(list(dataframes.values()), ignore_index=True, sort=False) if len(dataframes) > 1 else list(dataframes.values())[0]
                     print(f"Processing dataframe with columns: {list(first_df.columns)}")
                     
-                    # Create data summary for LLM
+                    # Bound the prompt while still giving the model whole-dataset descriptive statistics.
+                    data_for_prompt = first_df.to_csv(index=False) if len(first_df) <= 200 else first_df.head(25).to_csv(index=False)
+                    summary_statistics = first_df.describe(include="all").fillna("").to_string()
                     data_summary = {
                         "columns": list(first_df.columns),
                         "shape": first_df.shape,
@@ -346,8 +348,11 @@ You are a data analyst. Given this dataset information:
 - Sample data: {data_summary['sample_data']}
 - Data types: {data_summary['data_types']}
 
-Full dataset:
-{first_df.head(10).to_string()}
+Dataset rows (complete when small; otherwise a representative sample):
+{data_for_prompt}
+
+Whole-dataset descriptive statistics:
+{summary_statistics}
 
 Answer each question with a precise, factual response. Number your answers (1., 2., etc.) and provide only direct answers without explanations.
 
@@ -399,14 +404,16 @@ Questions:
             # Default analysis for any data - JSON array format
             print("Performing default analysis - JSON array format")
             if dataframes:
-                first_df = list(dataframes.values())[0]
+                first_df = pd.concat(list(dataframes.values()), ignore_index=True, sort=False) if len(dataframes) > 1 else list(dataframes.values())[0]
                 print(f"Default analysis on dataframe with columns: {list(first_df.columns)}")
                 
                 # Use LLM to analyze the question and provide exactly what's requested
                 try:
                     client = get_openai_client()
                     if client:
-                        # Create data summary for LLM
+                        # Bound the prompt while still giving the model whole-dataset descriptive statistics.
+                        data_for_prompt = first_df.to_csv(index=False) if len(first_df) <= 200 else first_df.head(25).to_csv(index=False)
+                        summary_statistics = first_df.describe(include="all").fillna("").to_string()
                         data_summary = {
                             "columns": list(first_df.columns),
                             "shape": first_df.shape,
@@ -423,8 +430,11 @@ Dataset:
 - Sample data: {data_summary['sample_data']}
 - Data types: {data_summary['data_types']}
 
-Full dataset:
-{first_df.head(10).to_string()}
+Dataset rows (complete when small; otherwise a representative sample):
+{data_for_prompt}
+
+Whole-dataset descriptive statistics:
+{summary_statistics}
 
 Question: {questions_content}
 
