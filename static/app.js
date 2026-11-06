@@ -17,8 +17,8 @@
   const charCount = document.getElementById("charCount");
   const apiStatus = document.getElementById("apiStatus");
 
-  const MAX_FILE_BYTES = 25 * 1024 * 1024;
-  const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
+  const MAX_FILE_BYTES = 150 * 1024 * 1024;
+  const MAX_TOTAL_BYTES = 150 * 1024 * 1024;
   const allowedExtensions = [".csv", ".xlsx", ".xls", ".json", ".parquet", ".zip", ".tar.gz", ".tgz"];
   let selectedFiles = [];
   let latestResult = null;
@@ -99,7 +99,7 @@
         return;
       }
       if (file.size > MAX_FILE_BYTES) {
-        rejected.push(file.name + " (over 25 MB)");
+        rejected.push(file.name + " (over 150 MB)");
         return;
       }
       accepted.push(file);
@@ -109,7 +109,7 @@
     const next = selectedFiles.concat(accepted);
     const total = next.reduce((sum, file) => sum + file.size, 0);
     if (total > MAX_TOTAL_BYTES) {
-      showError("These files exceed the 50 MB total upload limit. Remove a file or choose a smaller dataset.");
+      showError("These files exceed the 150 MB total upload limit. Remove a file or choose a smaller dataset.");
       return;
     }
     selectedFiles = next;

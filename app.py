@@ -97,7 +97,7 @@ class DataAnalyst:
         destination = Path(extract_to).resolve()
         destination.mkdir(parents=True, exist_ok=True)
         max_entries = int(os.getenv("MAX_ARCHIVE_ENTRIES", "2000"))
-        max_unpacked = int(os.getenv("MAX_ARCHIVE_UNPACKED_BYTES", str(100 * 1024 * 1024)))
+        max_unpacked = int(os.getenv("MAX_ARCHIVE_UNPACKED_BYTES", str(150 * 1024 * 1024)))
 
         def safe_target(member_name: str) -> Path:
             target = (destination / member_name).resolve()
@@ -569,8 +569,8 @@ Return your answer as a JSON array like ["12"] for a math problem or ["answer"] 
 async def analyze_data_endpoint(request: Request):
     """Analyze uploaded files against questions.txt and return JSON results."""
     analyst = DataAnalyst()
-    max_file_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
-    max_total_bytes = int(os.getenv("MAX_TOTAL_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    max_file_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(150 * 1024 * 1024)))
+    max_total_bytes = int(os.getenv("MAX_TOTAL_UPLOAD_BYTES", str(150 * 1024 * 1024)))
     max_question_bytes = int(os.getenv("MAX_QUESTIONS_BYTES", str(512 * 1024)))
     try:
         content_length = request.headers.get("content-length")

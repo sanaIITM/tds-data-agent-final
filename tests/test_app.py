@@ -44,6 +44,17 @@ def test_csv_upload_works_without_an_api_key(monkeypatch):
     assert response.status_code == 200
     assert response.json() == [3]
 
+def test_oversized_file_respects_configured_limit(monkeypatch):
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "4")
+    monkeypatch.setenv("MAX_TOTAL_UPLOAD_BYTES", "1024")
+    files = {
+        "questions.txt": ("questions.txt", b"count rows", "text/plain"),
+        "data.csv": ("data.csv", b"value\\n123\\n", "text/csv"),
+    }
+    response = client.post("/api/", files=files)
+    assert response.status_code == 413
+
+
 def test_zip_path_traversal_is_rejected():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

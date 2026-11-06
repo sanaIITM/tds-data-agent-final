@@ -42,11 +42,11 @@ Create a local .env file for development (it is ignored by Git), or add these va
     OPENROUTER_MODEL=google/gemma-4-26b-a4b-it
     OPENROUTER_APP_NAME=TDS Data Analyst Agent
     LLM_TIMEOUT_SECONDS=90
-    MAX_UPLOAD_BYTES=26214400
-    MAX_TOTAL_UPLOAD_BYTES=52428800
+    MAX_UPLOAD_BYTES=157286400
+    MAX_TOTAL_UPLOAD_BYTES=157286400
     MAX_QUESTIONS_BYTES=524288
     MAX_ARCHIVE_ENTRIES=2000
-    MAX_ARCHIVE_UNPACKED_BYTES=104857600
+    MAX_ARCHIVE_UNPACKED_BYTES=157286400
 
 A safe starter file is available at .env.example. Never commit a real API key.
 
@@ -101,6 +101,10 @@ The Blueprint prompts for OPENROUTER_API_KEY because it is marked sync:false. Do
 - .json
 - .parquet
 - .zip, .tar.gz, .tgz (containing supported data files)
+
+## Upload size
+
+The interface and API accept **up to 150 MiB per file and 150 MiB combined per request**. Archive extraction is separately bounded to 150 MiB of unpacked content. These are upload/validation limits, not a guarantee that every 150 MiB dataset can be analyzed on a low-memory instance: tabular data can use several times its on-disk size when loaded into Pandas. Large-file analysis may require a higher-memory Render plan.
 
 The current web-table loader only accepts an explicit HTTPS Wikipedia page URL included in questions.txt. It is not a general-purpose crawler and does not directly query remote S3 buckets.
 

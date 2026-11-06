@@ -16,12 +16,12 @@ services:
       - key: LLM_TIMEOUT_SECONDS
         value: '90'
       - key: MAX_UPLOAD_BYTES
-        value: '26214400'
+        value: '157286400'
       - key: MAX_TOTAL_UPLOAD_BYTES
-        value: '52428800'
+        value: '157286400'
       - key: MAX_QUESTIONS_BYTES
         value: '524288'
       - key: MAX_ARCHIVE_ENTRIES
         value: '2000'
       - key: MAX_ARCHIVE_UNPACKED_BYTES
-        value: '104857600'
+        value: '157286400'
