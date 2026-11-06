@@ -601,7 +601,7 @@ async def analyze_data_endpoint(request: Request):
             dataframes = await analyst.process_local_files(local_files) if local_files else {}
 
             # Scrape only an explicit HTTPS Wikipedia URL in the user-provided question.
-            url_match = re.search(r"https?://\\S+", questions_content)
+            url_match = re.search(r"https?://\S+", questions_content)
             explicit_url = url_match.group(0).rstrip(".,);]") if url_match else None
             parsed_url = urlparse(explicit_url) if explicit_url else None
             should_scrape = bool(explicit_url and parsed_url and parsed_url.scheme == "https" and parsed_url.hostname == "en.wikipedia.org")
