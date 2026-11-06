@@ -321,7 +321,7 @@ You are a data analyst. Given this dataset information:
 - Data types: {data_summary['data_types']}
 
 Full dataset:
-{first_df.to_string()}
+{first_df.head(10).to_string()}
 
 Answer each question with a precise, factual response. Number your answers (1., 2., etc.) and provide only direct answers without explanations.
 
@@ -349,7 +349,7 @@ Questions:
                                         if answer.replace('.', '').replace('-', '').replace(',', '').isdigit():
                                             result[question] = float(answer.replace(',', '')) if '.' in answer else int(answer.replace(',', ''))
                                         elif answer.startswith('[') and answer.endswith(']'):
-                                            result[question] = eval(answer)  # Parse list format
+                                            result[question] = json.loads(answer)  # Parse list format
                                         else:
                                             result[question] = answer
                                     except:
@@ -398,7 +398,7 @@ Dataset:
 - Data types: {data_summary['data_types']}
 
 Full dataset:
-{first_df.to_string()}
+{first_df.head(10).to_string()}
 
 Question: {questions_content}
 
