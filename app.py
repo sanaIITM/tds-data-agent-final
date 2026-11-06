@@ -8,7 +8,9 @@ import zipfile
 import tarfile
 import base64
 import io
+import stat
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import List, Dict, Any, Union
 import asyncio
 
@@ -31,7 +33,7 @@ from openai import OpenAI
 # OpenRouter configuration (set these in your deployment environment)
 # OPENROUTER_API_KEY is required; model/base URL are configurable.
 
-app = FastAPI(title="TDS Data Analyst Agent", version="1.0.0")
+app = FastAPI(title="TDS Data Analyst Agent", version="1.1.0")
                                 
 # Initialize OpenAI client (will be initialized when needed to avoid startup errors)
 client = None
@@ -68,42 +70,56 @@ class DataAnalyst:
         self.extracted_files = []
         
     async def extract_archive(self, file_path: str, extract_to: str) -> List[str]:
-        """Extract zip or tar.gz files recursively"""
-        extracted_files = []
-        
+        """Safely extract ZIP/TAR.GZ archives within bounded expansion limits."""
+        destination = Path(extract_to).resolve()
+        destination.mkdir(parents=True, exist_ok=True)
+        max_entries = int(os.getenv("MAX_ARCHIVE_ENTRIES", "2000"))
+        max_unpacked = int(os.getenv("MAX_ARCHIVE_UNPACKED_BYTES", str(100 * 1024 * 1024)))
+
+        def safe_target(member_name: str) -> Path:
+            target = (destination / member_name).resolve()
+            if target != destination and destination not in target.parents:
+                raise ValueError("Archive path escapes extraction directory")
+            return target
+
         try:
-            destination = Path(extract_to).resolve()
-
-            def safe_target(member_name: str) -> Path:
-                target = (destination / member_name).resolve()
-                if target != destination and destination not in target.parents:
-                    raise ValueError(f"Unsafe archive member path: {member_name}")
-                return target
-
-            if file_path.endswith('.zip'):
-                with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                    for member in zip_ref.infolist():
+            if file_path.lower().endswith(".zip"):
+                with zipfile.ZipFile(file_path, "r") as archive:
+                    members = archive.infolist()
+                    if len(members) > max_entries:
+                        raise ValueError("Too many archive entries")
+                    if sum(m.file_size for m in members) > max_unpacked:
+                        raise ValueError("Archive expands beyond configured size limit")
+                    for member in members:
                         safe_target(member.filename)
-                    zip_ref.extractall(destination)
-            elif file_path.endswith(('.tar.gz', '.tgz')):
-                with tarfile.open(file_path, 'r:gz') as tar_ref:
-                    for member in tar_ref.getmembers():
+                        mode = member.external_attr >> 16
+                        if stat.S_ISLNK(mode):
+                            raise ValueError("Archive links are not allowed")
+                    archive.extractall(destination)
+            elif file_path.lower().endswith((".tar.gz", ".tgz")):
+                with tarfile.open(file_path, "r:gz") as archive:
+                    members = archive.getmembers()
+                    if len(members) > max_entries:
+                        raise ValueError("Too many archive entries")
+                    if sum(m.size for m in members if m.isfile()) > max_unpacked:
+                        raise ValueError("Archive expands beyond configured size limit")
+                    for member in members:
                         safe_target(member.name)
-                        if member.issym() or member.islnk():
-                            raise ValueError(f"Archive links are not allowed: {member.name}")
-                    tar_ref.extractall(destination)
-            
-            # Recursively find all extracted files
-            for root, dirs, files in os.walk(extract_to):
-                for file in files:
-                    full_path = os.path.join(root, file)
-                    extracted_files.append(full_path)
-                    
-        except Exception as e:
-            print(f"Error extracting {file_path}: {e}")
-            
-        return extracted_files
-    
+                        if not (member.isfile() or member.isdir()):
+                            raise ValueError("Links and special archive entries are not allowed")
+                    archive.extractall(destination)
+            else:
+                raise ValueError("Unsupported archive format")
+
+            result = []
+            for root, dirs, files in os.walk(destination):
+                dirs.sort()
+                for name in sorted(files):
+                    result.append(str(Path(root) / name))
+            return result
+        except Exception as exc:
+            print(f"Archive extraction rejected for {file_path}: {exc}")
+            raise ValueError("The uploaded archive is invalid, unsafe, or exceeds extraction limits.") from exc
     async def parse_questions_file(self, questions_content: str) -> Dict[str, Any]:
         """Parse questions.txt to understand requirements"""
         try:
@@ -132,39 +148,29 @@ class DataAnalyst:
             "output_format": "array" if "array" in content_lower else "object"
         }
     
-    async def scrape_web_data(self, query: str) -> pd.DataFrame:
-        """Scrape data from web sources"""
+    async def scrape_web_data(self, url: str) -> pd.DataFrame:
+        """Load tables from an explicit HTTPS Wikipedia URL."""
         try:
-            # Example: Wikipedia scraping
-            search_url = f"https://en.wikipedia.org/wiki/{query.replace(' ', '_')}"
-            response = requests.get(search_url, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Try to find tables
-                tables = soup.find_all('table', {'class': 'wikitable'})
-                if tables:
-                    # Convert first table to DataFrame
-                    table_data = []
-                    table = tables[0]
-                    headers = [th.get_text().strip() for th in table.find_all('th')]
-                    
-                    for row in table.find_all('tr')[1:]:  # Skip header row
-                        cells = [td.get_text().strip() for td in row.find_all(['td', 'th'])]
-                        if cells:
-                            table_data.append(cells)
-                    
-                    if table_data and headers:
-                        df = pd.DataFrame(table_data, columns=headers[:len(table_data[0])])
-                        return df
-                        
-        except Exception as e:
-            print(f"Web scraping error: {e}")
-            
-        # Return empty DataFrame if scraping fails
+            parsed = urlparse(url)
+            if parsed.scheme != "https" or parsed.hostname != "en.wikipedia.org":
+                raise ValueError("Only explicit HTTPS Wikipedia URLs are supported")
+            response = requests.get(
+                url,
+                headers={"User-Agent": "TDSDataAnalystAgent/1.1 (educational analysis)"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            for table in soup.find_all("table", class_="wikitable"):
+                try:
+                    frames = pd.read_html(io.StringIO(str(table)))
+                    if frames and not frames[0].empty:
+                        return frames[0]
+                except ValueError:
+                    continue
+        except Exception as exc:
+            print(f"Web scraping error: {exc}")
         return pd.DataFrame()
-    
     async def process_local_files(self, file_paths: List[str]) -> Dict[str, pd.DataFrame]:
         """Process local files and return DataFrames"""
         dataframes = {}
@@ -189,7 +195,7 @@ class DataAnalyst:
                 elif file_ext == '.parquet':
                     # Use DuckDB for parquet files
                     conn = duckdb.connect()
-                    df = conn.execute(f"SELECT * FROM '{file_path}'").df()
+                    df = conn.execute("SELECT * FROM read_parquet(?)", [file_path]).df()
                     dataframes[file_name] = df
                     conn.close()
                     
