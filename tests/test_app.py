@@ -55,6 +55,25 @@ def test_oversized_file_respects_configured_limit(monkeypatch):
     assert response.status_code == 413
 
 
+
+def test_memory_guard_rejects_dataset_before_pandas_load(monkeypatch, tmp_path):
+    dataset = tmp_path / "large.csv"
+    dataset.write_bytes(b"value\n" + (b"1\n" * 1024))
+    monkeypatch.setattr(app_module, "get_available_memory_bytes", lambda: 100 * 1024 * 1024)
+    monkeypatch.setenv("DATA_MEMORY_MULTIPLIER", "3")
+    monkeypatch.setenv("MIN_MEMORY_RESERVE_BYTES", str(96 * 1024 * 1024))
+    with pytest.raises(app_module.HTTPException) as exc:
+        app_module.guard_dataset_memory([str(dataset)])
+    assert exc.value.status_code == 413
+    assert "higher-memory instance" in exc.value.detail
+
+
+def test_memory_guard_allows_small_dataset_when_memory_is_available(monkeypatch, tmp_path):
+    dataset = tmp_path / "small.csv"
+    dataset.write_bytes(b"value\n1\n")
+    monkeypatch.setattr(app_module, "get_available_memory_bytes", lambda: 256 * 1024 * 1024)
+    app_module.guard_dataset_memory([str(dataset)])
+
 def test_zip_path_traversal_is_rejected():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
