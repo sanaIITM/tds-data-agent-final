@@ -1,117 +1,102 @@
 # TDS Data Analyst Agent
 
-A fully compliant Python API for automated data analysis and visualization, designed for evaluation systems.
+A FastAPI service for answering data-analysis questions about uploaded files and returning JSON results, including base64 visualizations where requested.
+
+## LLM provider
+
+This repository uses OpenRouter with the default model:
+
+google/gemma-4-26b-a4b-it
+
+The project uses the OpenAI Python SDK as an OpenAI-compatible HTTP client. Requests are sent to OpenRouter, not directly to OpenAI.
 
 ## Features
 
-- **Multi-format Data Processing**: Handles CSV, Excel, JSON, Parquet, ZIP, TAR.GZ files
-- **Web Scraping**: Automated data collection from web sources
-- **AI-Powered Analysis**: Uses AI Pipe for intelligent reasoning and code generation
-- **Visualization**: Generates compliant plots with regression analysis
-- **Secure File Handling**: Safe extraction and processing of compressed archives
-- **Fast Response**: Completes analysis within 180 seconds
+- CSV, Excel, JSON and Parquet data loading
+- ZIP and TAR.GZ archive extraction
+- Pandas/NumPy data processing and DuckDB Parquet support
+- Matplotlib visualizations
+- FastAPI multipart endpoint at POST /api/
+- Configurable OpenRouter model
 
-## API Endpoint
+## Configuration
 
-### POST /api/
+Create a local .env file for development (it is ignored by Git), or add the same variables in Render:
 
-Accepts multipart form data with:
-- `questions.txt` (required): Problem statement and analysis requirements
-- Additional files: Data files in various formats (.csv, .xlsx, .json, .parquet, .zip, .tar.gz, etc.)
+    OPENROUTER_API_KEY=your_openrouter_api_key
+    OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+    OPENROUTER_MODEL=google/gemma-4-26b-a4b-it
+    LLM_TIMEOUT_SECONDS=90
 
-### Response Formats
+A safe starter file is available at .env.example. Never commit a real API key.
 
-**Case A - 4-element JSON Array:**
-```json
-[1, "Titanic", 0.485782, "data:image/png;base64,..."]
-```
+Get an OpenRouter key at https://openrouter.ai/settings/keys.
 
-**Case B - JSON Object:**
-```json
-{
-  "Which high court disposed the most cases from 2019 - 2022?": "Delhi High Court",
-  "What's the regression slope ...": "0.234",
-  "Plot the year ...": "data:image/webp;base64,..."
-}
-```
+## Run locally
 
-## Installation
+    python -m pip install -r requirements.txt
+    uvicorn app:app --reload --host 127.0.0.1 --port 8000
 
-1. Clone the repository
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+The service health endpoint is GET /.
 
-3. Set environment variables:
-```bash
-export OPENAI_API_KEY="your_ai_pipe_token"
-export OPENAI_BASE_URL="https://aipipe.org/openai/v1"
-```
+## API usage
 
-## Usage
+The POST /api/ endpoint accepts multipart form data. Include:
 
-### Local Development
-```bash
-python run.py
-```
+- questions.txt (required): analysis instructions/questions
+- One or more supported data files (optional)
 
-The API will be available at `http://localhost:8000`
+Example:
 
-### Testing
-```bash
-curl -X POST "http://localhost:8000/api/" \
-  -F "questions.txt=@questions.txt" \
-  -F "data.csv=@data.csv"
-```
+    curl -X POST http://localhost:8000/api/ -F questions.txt=@questions.txt -F data.csv=@data.csv
 
-## Deployment on Render
+The response preserves the project's JSON array/object formats. A requested visualization is returned as a data:image/png;base64,... value.
 
-1. Create a new Web Service on Render
-2. Connect your GitHub repository
-3. Set the following:
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python run.py`
-   - **Environment Variables**:
-     - `OPENAI_API_KEY`: Your AI Pipe token
-     - `OPENAI_BASE_URL`: `https://aipipe.org/openai/v1`
+## Deploy on Render
 
-## Supported File Types
+The repository includes a render.yaml Blueprint configuration. You can create/update a Render service from that Blueprint or configure an existing Web Service manually.
 
-- **Text**: .txt
-- **Spreadsheets**: .csv, .xlsx, .xls
-- **Data**: .json, .parquet
-- **Images**: .png, .jpg, .jpeg
-- **Archives**: .zip, .tar.gz, .tgz
-- **Documents**: .pdf
+Manual settings:
 
-## Technical Stack
+- Runtime: Python 3
+- Build command: pip install -r requirements.txt
+- Start command: uvicorn app:app --host 0.0.0.0 --port $PORT
+- Health check path: /
 
-- **Framework**: FastAPI + Uvicorn
-- **Data Processing**: Pandas, NumPy, DuckDB
-- **Visualization**: Matplotlib, Scikit-learn
-- **Web Scraping**: Requests, BeautifulSoup4
-- **AI Integration**: OpenAI (via AI Pipe)
-- **File Handling**: Pillow, aiofiles
+Set these Render environment variables:
 
-## Performance Features
+| Key | Value |
+|---|---|
+| OPENROUTER_API_KEY | Your OpenRouter API key (secret) |
+| OPENROUTER_BASE_URL | https://openrouter.ai/api/v1 |
+| OPENROUTER_MODEL | google/gemma-4-26b-a4b-it |
+| LLM_TIMEOUT_SECONDS | 90 |
 
-- Asynchronous file processing
-- Efficient memory usage for large datasets
-- Automatic image compression (<100KB)
-- Graceful error handling
-- Deterministic output generation
+Do not put secrets in render.yaml, source code, or GitHub.
 
-## Security
+## Supported file types
 
-- Secure file extraction with path validation
-- Temporary file cleanup
-- Input sanitization
-- Safe default responses for edge cases
+- .csv
+- .xlsx, .xls
+- .json
+- .parquet
+- .zip, .tar.gz, .tgz
 
-## License
+## Technical stack
 
-MIT License - see LICENSE file for details
+- FastAPI + Uvicorn
+- Pandas, NumPy, DuckDB, PyArrow
+- Matplotlib, scikit-learn
+- Requests, BeautifulSoup4
+- OpenAI-compatible Python SDK pointed at OpenRouter
+- Pillow, aiofiles
 
+## Notes
 
-## Author : Sana Bint Salim
+- Keep your OpenRouter key private and rotate it if it is ever exposed.
+- LLM output should be treated as untrusted input. Validate and parse structured output before returning it.
+- Exact numerical results should be computed from the dataframe in Python rather than guessed by the language model.
+
+## Author
+
+Sana Bint Salim
