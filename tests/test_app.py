@@ -64,7 +64,8 @@ def test_safe_zip_extracts_supported_file():
         assert Path(extracted[0]).name == "dataset.csv"
 
 def test_json_parser_handles_markdown_fences():
-    assert parse_json_response("```json\\n[1, \\\"ok\\\"]\\n```") == [1, "ok"]
+    raw = "```json" + chr(10) + '[1, "ok"]' + chr(10) + "```"
+    assert parse_json_response(raw) == [1, "ok"]
 
 def test_openrouter_client_uses_openrouter_base_url(monkeypatch):
     captured = {}
