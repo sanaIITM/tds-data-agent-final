@@ -530,113 +530,105 @@ Return your answer as a JSON array like ["12"] for a math problem or ["answer"] 
 
 @app.post("/api/")
 async def analyze_data_endpoint(request: Request):
-    """Main API endpoint for data analysis"""
-    print("API endpoint called")
+    """Analyze uploaded files against questions.txt and return JSON results."""
     analyst = DataAnalyst()
-    
+    max_file_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+    max_total_bytes = int(os.getenv("MAX_TOTAL_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    max_question_bytes = int(os.getenv("MAX_QUESTIONS_BYTES", str(512 * 1024)))
     try:
-        # Parse multipart form data
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > max_total_bytes + max_question_bytes:
+            raise HTTPException(status_code=413, detail="Request exceeds the upload size limit")
         form = await request.form()
-        print(f"Received form fields: {list(form.keys())}")
-        
-        # Create temporary directory
+        if "questions.txt" not in form:
+            raise HTTPException(status_code=400, detail="questions.txt is required")
+
         with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"Created temp directory: {temp_dir}")
             analyst.temp_dir = temp_dir
-            
-            # Save uploaded files
-            questions_content = ""
-            local_files = []
-            
-            # Process questions.txt (required)
-            if "questions.txt" not in form:
-                print("ERROR: questions.txt is required")
-                raise HTTPException(status_code=400, detail="questions.txt is required")
-            
             questions_file = form["questions.txt"]
-            if hasattr(questions_file, 'read'):
-                # It's an UploadFile
-                questions_content = (await questions_file.read()).decode('utf-8')
-                print(f"Found questions.txt with content: {questions_content[:100]}...")
+            if hasattr(questions_file, "read"):
+                raw_questions = await questions_file.read(max_question_bytes + 1)
+                if len(raw_questions) > max_question_bytes:
+                    raise HTTPException(status_code=413, detail="questions.txt exceeds the size limit")
+                try:
+                    questions_content = raw_questions.decode("utf-8-sig")
+                except UnicodeDecodeError as exc:
+                    raise HTTPException(status_code=400, detail="questions.txt must be UTF-8 text") from exc
             else:
-                # It's a string
                 questions_content = str(questions_file)
-                print(f"Found questions.txt as string: {questions_content[:100]}...")
-            
-            # Process all other files (optional)
+                if len(questions_content.encode("utf-8")) > max_question_bytes:
+                    raise HTTPException(status_code=413, detail="questions.txt exceeds the size limit")
+
+            if not questions_content.strip():
+                raise HTTPException(status_code=400, detail="questions.txt content is empty")
+
+            local_files = []
+            total_upload_bytes = len(questions_content.encode("utf-8"))
+            upload_index = 0
+            supported_extensions = {".csv", ".xlsx", ".xls", ".json", ".parquet"}
             for field_name, file_data in form.items():
-                if field_name == "questions.txt":
-                    continue  # Already processed
-                
-                if hasattr(file_data, 'read'):
-                    # It's an UploadFile
-                    print(f"Processing file: {field_name} -> {file_data.filename}")
-                    file_path = os.path.join(temp_dir, file_data.filename or field_name)
-                    
-                    async with aiofiles.open(file_path, 'wb') as f:
-                        content = await file_data.read()
-                        await f.write(content)
-                    
-                    if file_data.filename and file_data.filename.endswith(('.zip', '.tar.gz', '.tgz')):
-                        # Handle archives
-                        print(f"Extracting archive: {file_data.filename}")
-                        extracted = await analyst.extract_archive(file_path, temp_dir)
-                        local_files.extend(extracted)
-                    else:
-                        # Handle other data files
-                        print(f"Adding data file: {file_path}")
-                        local_files.append(file_path)
-            
-            if not questions_content:
-                print("ERROR: questions.txt content is empty")
-                raise HTTPException(status_code=400, detail="questions.txt content is required")
-            
-            print(f"Questions content: {questions_content}")
-            print(f"Local files: {local_files}")
-            
-            # Parse questions to understand requirements
-            print("Parsing questions file...")
+                if field_name == "questions.txt" or not hasattr(file_data, "read"):
+                    continue
+                upload_index += 1
+                original_name = str(getattr(file_data, "filename", "") or field_name)
+                safe_name = Path(original_name.replace(chr(92), "/")).name
+                if safe_name in {"", ".", ".."}:
+                    raise HTTPException(status_code=400, detail="An uploaded file has an invalid filename")
+                file_path = os.path.join(temp_dir, f"upload_{upload_index}_{safe_name}")
+                bytes_written = 0
+                async with aiofiles.open(file_path, "wb") as output_file:
+                    while True:
+                        chunk = await file_data.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        bytes_written += len(chunk)
+                        total_upload_bytes += len(chunk)
+                        if bytes_written > max_file_bytes or total_upload_bytes > max_total_bytes:
+                            raise HTTPException(status_code=413, detail="Uploaded files exceed the configured size limit")
+                        await output_file.write(chunk)
+
+                extension = Path(safe_name).suffix.lower()
+                if safe_name.lower().endswith((".zip", ".tar.gz", ".tgz")):
+                    extraction_dir = os.path.join(temp_dir, f"extracted_{upload_index}")
+                    extracted = await analyst.extract_archive(file_path, extraction_dir)
+                    for extracted_path in extracted:
+                        if Path(extracted_path).suffix.lower() in supported_extensions:
+                            local_files.append(extracted_path)
+                elif extension in supported_extensions:
+                    local_files.append(file_path)
+
             analysis_plan = await analyst.parse_questions_file(questions_content)
-            print(f"Analysis plan: {analysis_plan}")
-            
-            # Collect data
-            dataframes = {}
-            
-            # Process local files
-            if local_files:
-                print(f"Processing {len(local_files)} local files...")
-                local_dfs = await analyst.process_local_files(local_files)
-                dataframes.update(local_dfs)
-                print(f"Loaded {len(dataframes)} dataframes")
-            
-            # Web scraping if needed
-            if analysis_plan.get("needs_web_scraping", False):
-                print("Performing web scraping...")
-                web_df = await analyst.scrape_web_data("sample_query")
+            dataframes = await analyst.process_local_files(local_files) if local_files else {}
+
+            # Scrape only an explicit HTTPS Wikipedia URL in the user-provided question.
+            url_match = re.search(r"https?://\\S+", questions_content)
+            explicit_url = url_match.group(0).rstrip(".,);]") if url_match else None
+            parsed_url = urlparse(explicit_url) if explicit_url else None
+            should_scrape = bool(explicit_url and parsed_url and parsed_url.scheme == "https" and parsed_url.hostname == "en.wikipedia.org")
+            if should_scrape:
+                web_df = await analyst.scrape_web_data(explicit_url)
                 if not web_df.empty:
                     dataframes["web_data"] = web_df
-            
-            # Perform analysis
-            print("Starting data analysis...")
+
             result = await analyst.analyze_data(dataframes, questions_content)
-            print(f"Analysis result: {type(result)} - {str(result)[:200]}...")
-            
-            # Ensure result is JSON serializable
             if result is None:
-                result = [1, "Error", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
-            
-            # Properly encode the result to ensure clean JSON
-            json_compatible_result = jsonable_encoder(result)
-            return JSONResponse(content=json_compatible_result, media_type="application/json")
-            
-    except Exception as e:
+                raise HTTPException(status_code=500, detail="Analysis returned no result")
+            return JSONResponse(content=jsonable_encoder(result), media_type="application/json")
+
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
         import traceback
-        print(f"API Error: {e}")
-        print(f"Traceback: {traceback.format_exc()}")
-        # Return safe default response with proper JSON encoding
-        error_response = [1, "Error", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
-        json_compatible_error = jsonable_encoder(error_response)
-        return JSONResponse(content=json_compatible_error, media_type="application/json")
+        print(f"API error: {exc}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail="The analysis request failed. Check application logs for details.") from exc
+@app.get("/health")
+async def health():
+    """Render health check endpoint."""
+    return {"status": "ok"}
+
 
 @app.get("/")
 async def root():
