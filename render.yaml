@@ -18,7 +18,7 @@ services:
       - key: MAX_UPLOAD_BYTES
         value: '157286400'
       - key: MAX_TOTAL_UPLOAD_BYTES
-        value: '157286400'
+        value: '157810688'
       - key: MAX_QUESTIONS_BYTES
         value: '524288'
       - key: MAX_ARCHIVE_ENTRIES

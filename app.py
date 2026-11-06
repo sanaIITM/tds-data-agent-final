@@ -570,8 +570,9 @@ async def analyze_data_endpoint(request: Request):
     """Analyze uploaded files against questions.txt and return JSON results."""
     analyst = DataAnalyst()
     max_file_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(150 * 1024 * 1024)))
-    max_total_bytes = int(os.getenv("MAX_TOTAL_UPLOAD_BYTES", str(150 * 1024 * 1024)))
     max_question_bytes = int(os.getenv("MAX_QUESTIONS_BYTES", str(512 * 1024)))
+    # Leave room for the required questions.txt alongside 150 MiB of data files.
+    max_total_bytes = int(os.getenv("MAX_TOTAL_UPLOAD_BYTES", str(150 * 1024 * 1024 + max_question_bytes)))
     try:
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > max_total_bytes + max_question_bytes:
