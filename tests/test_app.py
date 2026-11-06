@@ -1,12 +1,15 @@
 import asyncio
+import base64
 import tempfile
 import zipfile
 from pathlib import Path
 
 import pytest
+import pandas as pd
 from fastapi.testclient import TestClient
 
-from app import DataAnalyst, app, get_llm_model
+import app as app_module
+from app import DataAnalyst, app, get_llm_model, parse_json_response
 
 client = TestClient(app)
 
@@ -59,3 +62,27 @@ def test_safe_zip_extracts_supported_file():
         extracted = asyncio.run(analyst.extract_archive(str(archive_path), str(extraction_path)))
         assert len(extracted) == 1
         assert Path(extracted[0]).name == "dataset.csv"
+
+def test_json_parser_handles_markdown_fences():
+    assert parse_json_response("```json\\n[1, \\\"ok\\\"]\\n```") == [1, "ok"]
+
+def test_openrouter_client_uses_openrouter_base_url(monkeypatch):
+    captured = {}
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+    monkeypatch.setattr(app_module, "OpenAI", FakeClient)
+    monkeypatch.setattr(app_module, "client", None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    assert app_module.get_openai_client() is not None
+    assert captured["api_key"] == "test-key"
+    assert captured["base_url"] == "https://openrouter.ai/api/v1"
+    assert captured["default_headers"]["X-Title"] == "TDS Data Analyst Agent"
+
+def test_visualization_payload_is_bounded():
+    data = pd.DataFrame({"x": list(range(100)), "y": [value ** 2 for value in range(100)]})
+    uri = DataAnalyst().create_visualization(data)
+    header, encoded = uri.split(",", 1)
+    assert header in {"data:image/png;base64", "data:image/webp;base64"}
+    assert len(base64.b64decode(encoded)) <= 100_000
