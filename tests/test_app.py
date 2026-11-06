@@ -17,6 +17,9 @@ def test_root_and_health_endpoints():
     home = client.get("/")
     assert home.status_code == 200
     assert home.headers["content-type"].startswith("text/html")
+    head = client.head("/")
+    assert head.status_code == 200
+    assert head.content == b""
     assert "Make your data" in home.text
     assert client.get("/static/app.css").status_code == 200
     assert client.get("/static/app.js").status_code == 200
