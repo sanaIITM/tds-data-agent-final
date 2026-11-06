@@ -2,13 +2,16 @@
 #key value pair edit 
 import os
 import json
+import re
 import tempfile
 import shutil
 import zipfile
 import tarfile
 import base64
 import io
+import stat
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import List, Dict, Any, Union
 import asyncio
 
@@ -28,28 +31,59 @@ import aiofiles
 from PIL import Image
 from openai import OpenAI
 
-# AI Pipe environment variables (set these in your deployment environment)
-# OPENAI_API_KEY should be set as environment variable
-# OPENAI_BASE_URL should be set as environment variable
+# OpenRouter configuration (set these in your deployment environment)
+# OPENROUTER_API_KEY is required; model/base URL are configurable.
 
-app = FastAPI(title="TDS Data Analyst Agent", version="1.0.0")
+app = FastAPI(title="TDS Data Analyst Agent", version="1.1.0")
                                 
 # Initialize OpenAI client (will be initialized when needed to avoid startup errors)
 client = None
 
 def get_openai_client():
+    """Return an OpenAI-compatible client configured for OpenRouter."""
     global client
     if client is None:
-        try:
-            client = OpenAI(
-                api_key=os.environ["OPENAI_API_KEY"],
-                base_url=os.environ["OPENAI_BASE_URL"]
-            )
-        except Exception as e:
-            print(f"OpenAI client initialization error: {e}")
-            # Create a mock client for fallback
-            client = None
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        client = OpenAI(
+            api_key=api_key,
+            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "90")),
+            max_retries=2,
+            default_headers={"X-Title": os.getenv("OPENROUTER_APP_NAME", "TDS Data Analyst Agent")},
+        )
     return client
+
+
+def get_llm_model() -> str:
+    """Return the configured OpenRouter model."""
+    return os.getenv("OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it")
+
+
+def chat_completion(client_instance, **kwargs):
+    """Create a chat completion using the configured OpenRouter model."""
+    kwargs["model"] = get_llm_model()
+    return client_instance.chat.completions.create(**kwargs)
+
+def parse_json_response(raw: str):
+    """Parse JSON from a model response, including fenced JSON output."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("The model returned an empty response")
+    cleaned = raw.strip()
+    if cleaned.startswith(chr(96) * 3):
+        lines = cleaned.splitlines()
+        if len(lines) >= 3 and lines[-1].strip().startswith(chr(96) * 3):
+            cleaned = "\n".join(lines[1:-1]).strip()
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(cleaned):
+        if char in "[{":
+            try:
+                value, _ = decoder.raw_decode(cleaned[index:])
+                return value
+            except json.JSONDecodeError:
+                continue
+    raise ValueError("The model response did not contain valid JSON")
 
 class DataAnalyst:
     def __init__(self):
@@ -57,43 +91,70 @@ class DataAnalyst:
         self.extracted_files = []
         
     async def extract_archive(self, file_path: str, extract_to: str) -> List[str]:
-        """Extract zip or tar.gz files recursively"""
-        extracted_files = []
-        
+        """Safely extract ZIP/TAR.GZ archives within bounded expansion limits."""
+        destination = Path(extract_to).resolve()
+        destination.mkdir(parents=True, exist_ok=True)
+        max_entries = int(os.getenv("MAX_ARCHIVE_ENTRIES", "2000"))
+        max_unpacked = int(os.getenv("MAX_ARCHIVE_UNPACKED_BYTES", str(100 * 1024 * 1024)))
+
+        def safe_target(member_name: str) -> Path:
+            target = (destination / member_name).resolve()
+            if target != destination and destination not in target.parents:
+                raise ValueError("Archive path escapes extraction directory")
+            return target
+
         try:
-            if file_path.endswith('.zip'):
-                with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                    zip_ref.extractall(extract_to)
-            elif file_path.endswith(('.tar.gz', '.tgz')):
-                with tarfile.open(file_path, 'r:gz') as tar_ref:
-                    tar_ref.extractall(extract_to)
-            
-            # Recursively find all extracted files
-            for root, dirs, files in os.walk(extract_to):
-                for file in files:
-                    full_path = os.path.join(root, file)
-                    extracted_files.append(full_path)
-                    
-        except Exception as e:
-            print(f"Error extracting {file_path}: {e}")
-            
-        return extracted_files
-    
+            if file_path.lower().endswith(".zip"):
+                with zipfile.ZipFile(file_path, "r") as archive:
+                    members = archive.infolist()
+                    if len(members) > max_entries:
+                        raise ValueError("Too many archive entries")
+                    if sum(m.file_size for m in members) > max_unpacked:
+                        raise ValueError("Archive expands beyond configured size limit")
+                    for member in members:
+                        safe_target(member.filename)
+                        mode = member.external_attr >> 16
+                        if stat.S_ISLNK(mode):
+                            raise ValueError("Archive links are not allowed")
+                    archive.extractall(destination)
+            elif file_path.lower().endswith((".tar.gz", ".tgz")):
+                with tarfile.open(file_path, "r:gz") as archive:
+                    members = archive.getmembers()
+                    if len(members) > max_entries:
+                        raise ValueError("Too many archive entries")
+                    if sum(m.size for m in members if m.isfile()) > max_unpacked:
+                        raise ValueError("Archive expands beyond configured size limit")
+                    for member in members:
+                        safe_target(member.name)
+                        if not (member.isfile() or member.isdir()):
+                            raise ValueError("Links and special archive entries are not allowed")
+                    archive.extractall(destination)
+            else:
+                raise ValueError("Unsupported archive format")
+
+            result = []
+            for root, dirs, files in os.walk(destination):
+                dirs.sort()
+                for name in sorted(files):
+                    result.append(str(Path(root) / name))
+            return result
+        except Exception as exc:
+            print(f"Archive extraction rejected for {file_path}: {exc}")
+            raise ValueError("The uploaded archive is invalid, unsafe, or exceeds extraction limits.") from exc
     async def parse_questions_file(self, questions_content: str) -> Dict[str, Any]:
         """Parse questions.txt to understand requirements"""
         try:
             openai_client = get_openai_client()
             if openai_client:
-                response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
+                response = chat_completion(openai_client,
+                                        messages=[
                         {"role": "system", "content": "Analyze the problem statement and determine: 1) If web scraping is needed, 2) What data sources to use, 3) What analysis is required, 4) Expected output format. Return JSON with keys: needs_web_scraping, data_sources, analysis_type, output_format"},
                         {"role": "user", "content": f"Problem statement: {questions_content}"}
                     ],
                     max_tokens=500
                 )
                 
-                analysis = json.loads(response.choices[0].message.content)
+                analysis = parse_json_response(response.choices[0].message.content or '')
                 return analysis
             
         except Exception as e:
@@ -108,39 +169,29 @@ class DataAnalyst:
             "output_format": "array" if "array" in content_lower else "object"
         }
     
-    async def scrape_web_data(self, query: str) -> pd.DataFrame:
-        """Scrape data from web sources"""
+    async def scrape_web_data(self, url: str) -> pd.DataFrame:
+        """Load tables from an explicit HTTPS Wikipedia URL."""
         try:
-            # Example: Wikipedia scraping
-            search_url = f"https://en.wikipedia.org/wiki/{query.replace(' ', '_')}"
-            response = requests.get(search_url, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Try to find tables
-                tables = soup.find_all('table', {'class': 'wikitable'})
-                if tables:
-                    # Convert first table to DataFrame
-                    table_data = []
-                    table = tables[0]
-                    headers = [th.get_text().strip() for th in table.find_all('th')]
-                    
-                    for row in table.find_all('tr')[1:]:  # Skip header row
-                        cells = [td.get_text().strip() for td in row.find_all(['td', 'th'])]
-                        if cells:
-                            table_data.append(cells)
-                    
-                    if table_data and headers:
-                        df = pd.DataFrame(table_data, columns=headers[:len(table_data[0])])
-                        return df
-                        
-        except Exception as e:
-            print(f"Web scraping error: {e}")
-            
-        # Return empty DataFrame if scraping fails
+            parsed = urlparse(url)
+            if parsed.scheme != "https" or parsed.hostname != "en.wikipedia.org":
+                raise ValueError("Only explicit HTTPS Wikipedia URLs are supported")
+            response = requests.get(
+                url,
+                headers={"User-Agent": "TDSDataAnalystAgent/1.1 (educational analysis)"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            for table in soup.find_all("table", class_="wikitable"):
+                try:
+                    frames = pd.read_html(io.StringIO(str(table)))
+                    if frames and not frames[0].empty:
+                        return frames[0]
+                except ValueError:
+                    continue
+        except Exception as exc:
+            print(f"Web scraping error: {exc}")
         return pd.DataFrame()
-    
     async def process_local_files(self, file_paths: List[str]) -> Dict[str, pd.DataFrame]:
         """Process local files and return DataFrames"""
         dataframes = {}
@@ -165,7 +216,7 @@ class DataAnalyst:
                 elif file_ext == '.parquet':
                     # Use DuckDB for parquet files
                     conn = duckdb.connect()
-                    df = conn.execute(f"SELECT * FROM '{file_path}'").df()
+                    df = conn.execute("SELECT * FROM read_parquet(?)", [file_path]).df()
                     dataframes[file_name] = df
                     conn.close()
                     
@@ -191,14 +242,11 @@ class DataAnalyst:
                     plt.scatter(data[x_col], data[y_col], alpha=0.6)
                     
                     # Add regression line
-                    x_vals = data[x_col].dropna()
-                    y_vals = data[y_col].dropna()
-                    
-                    if len(x_vals) > 1 and len(y_vals) > 1:
-                        # Ensure same length
-                        min_len = min(len(x_vals), len(y_vals))
-                        x_vals = x_vals.iloc[:min_len]
-                        y_vals = y_vals.iloc[:min_len]
+                    plot_data = data[[x_col, y_col]].apply(pd.to_numeric, errors="coerce").dropna()
+                    x_vals = plot_data[x_col]
+                    y_vals = plot_data[y_col]
+
+                    if len(plot_data) > 1:
                         
                         # Fit regression
                         reg = LinearRegression()
@@ -213,24 +261,28 @@ class DataAnalyst:
                     plt.ylabel(y_col)
                     plt.title(f"{y_col} vs {x_col}")
             
-            # Save to bytes
+            # Keep visualization payloads within the 100 KB target where possible.
             buffer = io.BytesIO()
-            plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-            buffer.seek(0)
-            
-            # Compress if needed
-            img = Image.open(buffer)
-            if buffer.getbuffer().nbytes > 100000:  # 100KB
-                # Reduce quality
-                buffer = io.BytesIO()
-                img.save(buffer, format='PNG', optimize=True, quality=85)
-                buffer.seek(0)
-            
-            # Encode to base64
-            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            plt.close()
-            
-            return f"data:image/png;base64,{img_base64}"
+            plt.savefig(buffer, format="png", dpi=100, bbox_inches="tight")
+            image_bytes = buffer.getvalue()
+            plt.close("all")
+
+            if len(image_bytes) <= 95000:
+                return "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            for dimensions, quality in [((900, 600), 78), ((720, 480), 68), ((560, 380), 58), ((420, 300), 48)]:
+                image.thumbnail(dimensions)
+                compressed = io.BytesIO()
+                image.save(compressed, format="WEBP", quality=quality, method=6)
+                if compressed.tell() <= 95000:
+                    return "data:image/webp;base64," + base64.b64encode(compressed.getvalue()).decode("ascii")
+
+            # Final bounded-size fallback for unusually complex charts.
+            image.thumbnail((320, 240))
+            compressed = io.BytesIO()
+            image.save(compressed, format="WEBP", quality=35, method=6)
+            return "data:image/webp;base64," + base64.b64encode(compressed.getvalue()).decode("ascii")
             
         except Exception as e:
             print(f"Visualization error: {e}")
@@ -274,10 +326,12 @@ class DataAnalyst:
                 
                 # Process each dataframe to answer questions using LLM
                 if dataframes:
-                    first_df = list(dataframes.values())[0]
+                    first_df = pd.concat(list(dataframes.values()), ignore_index=True, sort=False) if len(dataframes) > 1 else list(dataframes.values())[0]
                     print(f"Processing dataframe with columns: {list(first_df.columns)}")
                     
-                    # Create data summary for LLM
+                    # Bound the prompt while still giving the model whole-dataset descriptive statistics.
+                    data_for_prompt = first_df.to_csv(index=False) if len(first_df) <= 200 else first_df.head(25).to_csv(index=False)
+                    summary_statistics = first_df.describe(include="all").fillna("").to_string()
                     data_summary = {
                         "columns": list(first_df.columns),
                         "shape": first_df.shape,
@@ -296,44 +350,46 @@ You are a data analyst. Given this dataset information:
 - Sample data: {data_summary['sample_data']}
 - Data types: {data_summary['data_types']}
 
-Full dataset:
-{first_df.to_string()}
+Dataset rows (complete when small; otherwise a representative sample):
+{data_for_prompt}
 
-Answer each question with a precise, factual response. Number your answers (1., 2., etc.) and provide only direct answers without explanations.
+Whole-dataset descriptive statistics:
+{summary_statistics}
+
+Answer only from the provided dataset context. Return a valid JSON object whose keys are the exact questions and whose values are concise answers. Do not invent values when the supplied context is insufficient.
 
 Questions:
 {chr(10).join([f"{i+1}. {q}" for i, q in enumerate(questions_list)])}
 """
                             
-                            response = client.chat.completions.create(
-                                model="gpt-3.5-turbo",
-                                messages=[{"role": "user", "content": prompt}],
+                            response = chat_completion(client,
+                                                                messages=[{"role": "user", "content": prompt}],
                                 temperature=0,
                                 max_tokens=1000
                             )
                             
-                            # Parse LLM response and map to questions
-                            answers = response.choices[0].message.content.strip().split('\n')
-                            for i, question in enumerate(questions_list):
-                                if i < len(answers) and answers[i].strip():
-                                    answer = answers[i].strip()
-                                    # Remove numbering from answer if present
-                                    if answer.startswith(f"{i+1}."):
-                                        answer = answer[len(f"{i+1}."):].strip()
-                                    
-                                    # Try to convert to appropriate type
-                                    try:
-                                        if answer.replace('.', '').replace('-', '').replace(',', '').isdigit():
-                                            result[question] = float(answer.replace(',', '')) if '.' in answer else int(answer.replace(',', ''))
-                                        elif answer.startswith('[') and answer.endswith(']'):
-                                            result[question] = eval(answer)  # Parse list format
-                                        else:
+                            # Parse structured JSON first; fall back to numbered text if needed.
+                            raw_answers = response.choices[0].message.content or ""
+                            try:
+                                parsed_answers = parse_json_response(raw_answers)
+                            except ValueError:
+                                parsed_answers = None
+                            if isinstance(parsed_answers, dict):
+                                for question in questions_list:
+                                    result[question] = parsed_answers.get(question, "Unable to analyze")
+                            else:
+                                answers = raw_answers.strip().splitlines()
+                                for i, question in enumerate(questions_list):
+                                    answer = answers[i].strip() if i < len(answers) else ""
+                                    if answer.startswith(f"{i + 1}."):
+                                        answer = answer[len(f"{i + 1}."):].strip()
+                                    if not answer:
+                                        result[question] = "Unable to analyze"
+                                    else:
+                                        try:
+                                            result[question] = json.loads(answer) if answer.startswith(("[", "{")) else answer
+                                        except json.JSONDecodeError:
                                             result[question] = answer
-                                    except:
-                                        result[question] = answer
-                                else:
-                                    result[question] = "Unable to analyze"
-                        
                         else:
                             # Fallback to basic pattern matching if no LLM available
                             for question in questions_list:
@@ -350,14 +406,16 @@ Questions:
             # Default analysis for any data - JSON array format
             print("Performing default analysis - JSON array format")
             if dataframes:
-                first_df = list(dataframes.values())[0]
+                first_df = pd.concat(list(dataframes.values()), ignore_index=True, sort=False) if len(dataframes) > 1 else list(dataframes.values())[0]
                 print(f"Default analysis on dataframe with columns: {list(first_df.columns)}")
                 
                 # Use LLM to analyze the question and provide exactly what's requested
                 try:
                     client = get_openai_client()
                     if client:
-                        # Create data summary for LLM
+                        # Bound the prompt while still giving the model whole-dataset descriptive statistics.
+                        data_for_prompt = first_df.to_csv(index=False) if len(first_df) <= 200 else first_df.head(25).to_csv(index=False)
+                        summary_statistics = first_df.describe(include="all").fillna("").to_string()
                         data_summary = {
                             "columns": list(first_df.columns),
                             "shape": first_df.shape,
@@ -374,8 +432,11 @@ Dataset:
 - Sample data: {data_summary['sample_data']}
 - Data types: {data_summary['data_types']}
 
-Full dataset:
-{first_df.to_string()}
+Dataset rows (complete when small; otherwise a representative sample):
+{data_for_prompt}
+
+Whole-dataset descriptive statistics:
+{summary_statistics}
 
 Question: {questions_content}
 
@@ -395,24 +456,27 @@ Examples:
 Provide only the JSON array, no explanations.
 """
                         
-                        response = client.chat.completions.create(
-                            model="gpt-3.5-turbo",
-                            messages=[{"role": "user", "content": prompt}],
+                        response = chat_completion(client,
+                                                        messages=[{"role": "user", "content": prompt}],
                             temperature=0,
                             max_tokens=500
                         )
                         
                         # Parse LLM response
-                        llm_response = response.choices[0].message.content.strip()
+                        llm_response = (response.choices[0].message.content or '').strip()
                         print(f"LLM response: {llm_response}")
                         
                         # Try to parse as JSON array
                         try:
                             import json
-                            result = json.loads(llm_response)
+                            result = parse_json_response(llm_response)
                             
+                            # The array-format endpoint must always return a JSON array.
+                            if not isinstance(result, list):
+                                result = [result]
+
                             # Check if visualization is needed
-                            if isinstance(result, list) and len(result) > 0 and result[-1] == "VISUALIZATION_NEEDED":
+                            if len(result) > 0 and result[-1] == "VISUALIZATION_NEEDED":
                                 result.pop()  # Remove the marker
                                 plot_b64 = self.create_visualization(first_df)
                                 result.append(plot_b64)
@@ -471,9 +535,8 @@ Question: {questions_content.strip()}
 
 Return your answer as a JSON array like ["12"] for a math problem or ["answer"] for other questions.
 """
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}],
+                    response = chat_completion(client,
+                                                messages=[{"role": "user", "content": prompt}],
                         temperature=0,
                         max_tokens=50
                     )
@@ -482,7 +545,7 @@ Return your answer as a JSON array like ["12"] for a math problem or ["answer"] 
 
                     # Parse to Python list safely
                     import json as json_lib
-                    result = json_lib.loads(llm_response)
+                    result = parse_json_response(llm_response)
 
                     # Ensure it's a list
                     if not isinstance(result, list):
@@ -498,118 +561,109 @@ Return your answer as a JSON array like ["12"] for a math problem or ["answer"] 
             import traceback
             print(f"Analysis error: {e}")
             print(f"Analysis traceback: {traceback.format_exc()}")
-            # Return safe default with proper encoding
-            return [1, "Error", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
+            raise RuntimeError("Data analysis failed; see server logs for the underlying exception.") from e
 
 @app.post("/api/")
 async def analyze_data_endpoint(request: Request):
-    """Main API endpoint for data analysis"""
-    print("API endpoint called")
+    """Analyze uploaded files against questions.txt and return JSON results."""
     analyst = DataAnalyst()
-    
+    max_file_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+    max_total_bytes = int(os.getenv("MAX_TOTAL_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    max_question_bytes = int(os.getenv("MAX_QUESTIONS_BYTES", str(512 * 1024)))
     try:
-        # Parse multipart form data
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > max_total_bytes + max_question_bytes:
+            raise HTTPException(status_code=413, detail="Request exceeds the upload size limit")
         form = await request.form()
-        print(f"Received form fields: {list(form.keys())}")
-        
-        # Create temporary directory
+        if "questions.txt" not in form:
+            raise HTTPException(status_code=400, detail="questions.txt is required")
+
         with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"Created temp directory: {temp_dir}")
             analyst.temp_dir = temp_dir
-            
-            # Save uploaded files
-            questions_content = ""
-            local_files = []
-            
-            # Process questions.txt (required)
-            if "questions.txt" not in form:
-                print("ERROR: questions.txt is required")
-                raise HTTPException(status_code=400, detail="questions.txt is required")
-            
             questions_file = form["questions.txt"]
-            if hasattr(questions_file, 'read'):
-                # It's an UploadFile
-                questions_content = (await questions_file.read()).decode('utf-8')
-                print(f"Found questions.txt with content: {questions_content[:100]}...")
+            if hasattr(questions_file, "read"):
+                raw_questions = await questions_file.read(max_question_bytes + 1)
+                if len(raw_questions) > max_question_bytes:
+                    raise HTTPException(status_code=413, detail="questions.txt exceeds the size limit")
+                try:
+                    questions_content = raw_questions.decode("utf-8-sig")
+                except UnicodeDecodeError as exc:
+                    raise HTTPException(status_code=400, detail="questions.txt must be UTF-8 text") from exc
             else:
-                # It's a string
                 questions_content = str(questions_file)
-                print(f"Found questions.txt as string: {questions_content[:100]}...")
-            
-            # Process all other files (optional)
+                if len(questions_content.encode("utf-8")) > max_question_bytes:
+                    raise HTTPException(status_code=413, detail="questions.txt exceeds the size limit")
+
+            if not questions_content.strip():
+                raise HTTPException(status_code=400, detail="questions.txt content is empty")
+
+            local_files = []
+            total_upload_bytes = len(questions_content.encode("utf-8"))
+            upload_index = 0
+            supported_extensions = {".csv", ".xlsx", ".xls", ".json", ".parquet"}
             for field_name, file_data in form.items():
-                if field_name == "questions.txt":
-                    continue  # Already processed
-                
-                if hasattr(file_data, 'read'):
-                    # It's an UploadFile
-                    print(f"Processing file: {field_name} -> {file_data.filename}")
-                    file_path = os.path.join(temp_dir, file_data.filename or field_name)
-                    
-                    async with aiofiles.open(file_path, 'wb') as f:
-                        content = await file_data.read()
-                        await f.write(content)
-                    
-                    if file_data.filename and file_data.filename.endswith(('.zip', '.tar.gz', '.tgz')):
-                        # Handle archives
-                        print(f"Extracting archive: {file_data.filename}")
-                        extracted = await analyst.extract_archive(file_path, temp_dir)
-                        local_files.extend(extracted)
-                    else:
-                        # Handle other data files
-                        print(f"Adding data file: {file_path}")
-                        local_files.append(file_path)
-            
-            if not questions_content:
-                print("ERROR: questions.txt content is empty")
-                raise HTTPException(status_code=400, detail="questions.txt content is required")
-            
-            print(f"Questions content: {questions_content}")
-            print(f"Local files: {local_files}")
-            
-            # Parse questions to understand requirements
-            print("Parsing questions file...")
+                if field_name == "questions.txt" or not hasattr(file_data, "read"):
+                    continue
+                upload_index += 1
+                original_name = str(getattr(file_data, "filename", "") or field_name)
+                safe_name = Path(original_name.replace(chr(92), "/")).name
+                if safe_name in {"", ".", ".."}:
+                    raise HTTPException(status_code=400, detail="An uploaded file has an invalid filename")
+                file_path = os.path.join(temp_dir, f"upload_{upload_index}_{safe_name}")
+                bytes_written = 0
+                async with aiofiles.open(file_path, "wb") as output_file:
+                    while True:
+                        chunk = await file_data.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        bytes_written += len(chunk)
+                        total_upload_bytes += len(chunk)
+                        if bytes_written > max_file_bytes or total_upload_bytes > max_total_bytes:
+                            raise HTTPException(status_code=413, detail="Uploaded files exceed the configured size limit")
+                        await output_file.write(chunk)
+
+                extension = Path(safe_name).suffix.lower()
+                if safe_name.lower().endswith((".zip", ".tar.gz", ".tgz")):
+                    extraction_dir = os.path.join(temp_dir, f"extracted_{upload_index}")
+                    extracted = await analyst.extract_archive(file_path, extraction_dir)
+                    for extracted_path in extracted:
+                        if Path(extracted_path).suffix.lower() in supported_extensions:
+                            local_files.append(extracted_path)
+                elif extension in supported_extensions:
+                    local_files.append(file_path)
+
             analysis_plan = await analyst.parse_questions_file(questions_content)
-            print(f"Analysis plan: {analysis_plan}")
-            
-            # Collect data
-            dataframes = {}
-            
-            # Process local files
-            if local_files:
-                print(f"Processing {len(local_files)} local files...")
-                local_dfs = await analyst.process_local_files(local_files)
-                dataframes.update(local_dfs)
-                print(f"Loaded {len(dataframes)} dataframes")
-            
-            # Web scraping if needed
-            if analysis_plan.get("needs_web_scraping", False):
-                print("Performing web scraping...")
-                web_df = await analyst.scrape_web_data("sample_query")
+            dataframes = await analyst.process_local_files(local_files) if local_files else {}
+
+            # Scrape only an explicit HTTPS Wikipedia URL in the user-provided question.
+            url_match = re.search(r"https?://\S+", questions_content)
+            explicit_url = url_match.group(0).rstrip(".,);]") if url_match else None
+            parsed_url = urlparse(explicit_url) if explicit_url else None
+            should_scrape = bool(explicit_url and parsed_url and parsed_url.scheme == "https" and parsed_url.hostname == "en.wikipedia.org")
+            if should_scrape:
+                web_df = await analyst.scrape_web_data(explicit_url)
                 if not web_df.empty:
                     dataframes["web_data"] = web_df
-            
-            # Perform analysis
-            print("Starting data analysis...")
+
             result = await analyst.analyze_data(dataframes, questions_content)
-            print(f"Analysis result: {type(result)} - {str(result)[:200]}...")
-            
-            # Ensure result is JSON serializable
             if result is None:
-                result = [1, "Error", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
-            
-            # Properly encode the result to ensure clean JSON
-            json_compatible_result = jsonable_encoder(result)
-            return JSONResponse(content=json_compatible_result, media_type="application/json")
-            
-    except Exception as e:
+                raise HTTPException(status_code=500, detail="Analysis returned no result")
+            return JSONResponse(content=jsonable_encoder(result), media_type="application/json")
+
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
         import traceback
-        print(f"API Error: {e}")
-        print(f"Traceback: {traceback.format_exc()}")
-        # Return safe default response with proper JSON encoding
-        error_response = [1, "Error", 0.485782, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="]
-        json_compatible_error = jsonable_encoder(error_response)
-        return JSONResponse(content=json_compatible_error, media_type="application/json")
+        print(f"API error: {exc}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail="The analysis request failed. Check application logs for details.") from exc
+@app.get("/health")
+async def health():
+    """Render health check endpoint."""
+    return {"status": "ok"}
+
 
 @app.get("/")
 async def root():
