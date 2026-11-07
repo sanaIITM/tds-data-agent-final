@@ -77,6 +77,39 @@ def test_memory_guard_allows_small_dataset_when_memory_is_available(monkeypatch,
     monkeypatch.setattr(app_module, "get_available_memory_bytes", lambda: 256 * 1024 * 1024)
     app_module.guard_dataset_memory([str(dataset)])
 
+
+def test_large_csv_uses_bounded_duckdb_sampling(monkeypatch, tmp_path):
+    import csv
+
+    dataset = tmp_path / "large.csv"
+    with dataset.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["value", "group"])
+        for index in range(6000):
+            writer.writerow([index, "even" if index % 2 == 0 else "odd"])
+
+    monkeypatch.setenv("DUCKDB_CSV_THRESHOLD_BYTES", "1")
+    monkeypatch.setenv("DUCKDB_MEMORY_LIMIT_MB", "64")
+    analyst = DataAnalyst()
+    analyst.temp_dir = str(tmp_path)
+    frames = asyncio.run(analyst.process_local_files([str(dataset)]))
+
+    assert list(frames) == ["large.csv"]
+    assert len(frames["large.csv"]) == 5000
+    assert analyst.dataset_metadata["large.csv"]["shape"] == (6000, 2)
+    assert "value" in analyst.dataset_metadata["large.csv"]["summary_statistics"]
+
+
+def test_memory_guard_allows_large_csv_for_bounded_streaming(monkeypatch, tmp_path):
+    dataset = tmp_path / "large.csv"
+    with dataset.open("wb") as handle:
+        handle.write(b"value\\n")
+        handle.truncate(21 * 1024 * 1024)
+    monkeypatch.setenv("DUCKDB_CSV_THRESHOLD_BYTES", str(20 * 1024 * 1024))
+    monkeypatch.setattr(app_module, "get_available_memory_bytes", lambda: 199 * 1024 * 1024)
+    app_module.guard_dataset_memory([str(dataset)])
+
+
 def test_zip_path_traversal_is_rejected():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
