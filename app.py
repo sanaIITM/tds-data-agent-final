@@ -102,27 +102,51 @@ def get_available_memory_bytes():
 
 
 def guard_dataset_memory(file_paths: List[str]) -> None:
-    """Reject a dataset before parsing if its estimated working set exceeds free memory."""
-    dataset_bytes = sum(Path(path).stat().st_size for path in file_paths if Path(path).is_file())
-    if dataset_bytes <= 0:
+    """Protect Pandas workloads while allowing large CSVs to use bounded DuckDB streaming."""
+    existing_paths = [Path(path) for path in file_paths if Path(path).is_file()]
+    if not existing_paths:
         return
 
     available_bytes = get_available_memory_bytes()
     if available_bytes is None:
         return
 
-    multiplier = max(1.0, float(os.getenv("DATA_MEMORY_MULTIPLIER", "3.0")))
+    csv_threshold = int(os.getenv("DUCKDB_CSV_THRESHOLD_BYTES", str(20 * 1024 * 1024)))
+    is_streamed_csv = lambda path: path.suffix.lower() == ".csv" and path.stat().st_size >= csv_threshold
+    streamed_csv_bytes = sum(path.stat().st_size for path in existing_paths if is_streamed_csv(path))
+    pandas_bytes = sum(path.stat().st_size for path in existing_paths if not is_streamed_csv(path))
+
     reserve_bytes = max(0, int(os.getenv("MIN_MEMORY_RESERVE_BYTES", str(96 * 1024 * 1024))))
-    estimated_bytes = int(dataset_bytes * multiplier)
-    if estimated_bytes + reserve_bytes > available_bytes:
-        dataset_mb = dataset_bytes / (1024 * 1024)
+    minimum_stream_memory = max(
+        128 * 1024 * 1024,
+        int(os.getenv("DUCKDB_MIN_AVAILABLE_MEMORY_MB", "128")) * 1024 * 1024,
+    )
+    multiplier = max(1.0, float(os.getenv("DATA_MEMORY_MULTIPLIER", "3.0")))
+    estimated_pandas_bytes = int(pandas_bytes * multiplier)
+
+    # DuckDB scans large CSVs with a fixed memory ceiling and spills temporary
+    # work to disk. Keep a minimum memory reserve for Python and the API server.
+    if streamed_csv_bytes and available_bytes < minimum_stream_memory:
+        required_mb = minimum_stream_memory / (1024 * 1024)
         available_mb = available_bytes / (1024 * 1024)
         raise HTTPException(
             status_code=413,
             detail=(
-                f"This dataset is {dataset_mb:.1f} MiB, but the service currently has "
-                f"only {available_mb:.1f} MiB of free memory. To prevent the service "
-                "from restarting, use a smaller dataset or a higher-memory instance."
+                f"Large CSV streaming needs at least {required_mb:.0f} MiB of free memory; "
+                f"the service currently has {available_mb:.1f} MiB. Retry when the service "
+                "has more free memory or use a higher-memory instance."
+            ),
+        )
+
+    if estimated_pandas_bytes + reserve_bytes > available_bytes:
+        dataset_mb = pandas_bytes / (1024 * 1024)
+        available_mb = available_bytes / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Non-CSV uploads total {dataset_mb:.1f} MiB, but the service currently has "
+                f"only {available_mb:.1f} MiB of free memory. Use smaller non-CSV files "
+                "or a higher-memory instance."
             ),
         )
 
@@ -131,6 +155,43 @@ class DataAnalyst:
     def __init__(self):
         self.temp_dir = None
         self.extracted_files = []
+        self.dataset_metadata = {}
+
+    def build_analysis_context(self, dataframes: Dict[str, pd.DataFrame]):
+        """Build a compact prompt context, preferring full-file DuckDB metadata."""
+        import pandas as pd
+
+        first_name = next(iter(dataframes))
+        first_df = (
+            pd.concat(list(dataframes.values()), ignore_index=True, sort=False)
+            if len(dataframes) > 1
+            else list(dataframes.values())[0]
+        )
+        metadata = self.dataset_metadata.get(first_name)
+        if metadata and len(dataframes) == 1:
+            data_summary = {
+                "columns": metadata["columns"],
+                "shape": metadata["shape"],
+                "sample_data": first_df.head(3).to_dict("records"),
+                "data_types": metadata["data_types"],
+            }
+            data_for_prompt = first_df.head(25).to_csv(index=False)
+            summary_statistics = metadata["summary_statistics"]
+        else:
+            data_summary = {
+                "columns": list(first_df.columns),
+                "shape": first_df.shape,
+                "sample_data": first_df.head(3).to_dict("records"),
+                "data_types": first_df.dtypes.to_dict(),
+            }
+            data_for_prompt = (
+                first_df.to_csv(index=False)
+                if len(first_df) <= 200
+                else first_df.head(25).to_csv(index=False)
+            )
+            summary_statistics = first_df.describe(include="all").fillna("").to_string()
+
+        return first_df, data_summary, data_for_prompt, summary_statistics
         
     async def extract_archive(self, file_path: str, extract_to: str) -> List[str]:
         """Safely extract ZIP/TAR.GZ archives within bounded expansion limits."""
@@ -238,17 +299,61 @@ class DataAnalyst:
             print(f"Web scraping error: {exc}")
         return pd.DataFrame()
     async def process_local_files(self, file_paths: List[str]) -> Dict[str, pd.DataFrame]:
-        """Process local files and return DataFrames"""
+        """Load regular files with Pandas and stream large CSVs through bounded DuckDB."""
         import pandas as pd
         import duckdb
         dataframes = {}
-        
+
+        csv_stream_threshold = int(os.getenv("DUCKDB_CSV_THRESHOLD_BYTES", str(20 * 1024 * 1024)))
+        duckdb_memory_mb = max(64, min(128, int(os.getenv("DUCKDB_MEMORY_LIMIT_MB", "96"))))
+
         for file_path in file_paths:
             try:
                 file_ext = Path(file_path).suffix.lower()
                 file_name = Path(file_path).name
-                
-                if file_ext == '.csv':
+                file_size = Path(file_path).stat().st_size
+
+                if file_ext == '.csv' and file_size >= csv_stream_threshold:
+                    scratch_dir = tempfile.mkdtemp(prefix="duckdb-", dir=self.temp_dir)
+                    conn = duckdb.connect(
+                        database=":memory:",
+                        config={
+                            "memory_limit": f"{duckdb_memory_mb}MB",
+                            "threads": "1",
+                            "temp_directory": scratch_dir,
+                        },
+                    )
+                    try:
+                        escaped_path = file_path.replace("\\", "\\\\").replace("'", "''")
+                        source = f"read_csv_auto('{escaped_path}', sample_size=20000)"
+                        conn.execute("SET preserve_insertion_order = false")
+                        conn.execute(f"CREATE TEMP VIEW uploaded_dataset AS SELECT * FROM {source}")
+
+                        row_count = int(conn.execute("SELECT COUNT(*) FROM uploaded_dataset").fetchone()[0])
+                        summary_df = conn.execute("SUMMARIZE SELECT * FROM uploaded_dataset").fetchdf()
+                        sample_df = conn.execute("SELECT * FROM uploaded_dataset LIMIT 5000").fetchdf()
+
+                        columns = list(sample_df.columns)
+                        data_types = {
+                            str(row[0]): str(row[1])
+                            for row in conn.execute("DESCRIBE uploaded_dataset").fetchall()
+                        }
+                        summary_statistics = summary_df.head(80).to_string(index=False)
+                        dataframes[file_name] = sample_df
+                        self.dataset_metadata[file_name] = {
+                            "columns": columns,
+                            "shape": (row_count, len(columns)),
+                            "data_types": data_types,
+                            "summary_statistics": summary_statistics,
+                        }
+                        print(
+                            f"Streamed {file_name} through DuckDB: "
+                            f"{row_count} rows, {len(columns)} columns; "
+                            f"retained {len(sample_df)} sample rows in memory"
+                        )
+                    finally:
+                        conn.close()
+                elif file_ext == '.csv':
                     df = pd.read_csv(file_path)
                     dataframes[file_name] = df
                     
@@ -356,8 +461,12 @@ class DataAnalyst:
         import pandas as pd
         print(f"Starting analysis with {len(dataframes)} dataframes")
         print(f"Questions content: {questions_content[:100]}...")
-        
+
         try:
+            analysis_context = self.build_analysis_context(dataframes) if dataframes else None
+            if analysis_context:
+                first_df, data_summary, data_for_prompt, summary_statistics = analysis_context
+
             # Check for JSON object response request
             if ("json object" in questions_content.lower() or 
                 "key is the question" in questions_content.lower() or
@@ -379,18 +488,7 @@ class DataAnalyst:
                 
                 # Process each dataframe to answer questions using LLM
                 if dataframes:
-                    first_df = pd.concat(list(dataframes.values()), ignore_index=True, sort=False) if len(dataframes) > 1 else list(dataframes.values())[0]
                     print(f"Processing dataframe with columns: {list(first_df.columns)}")
-                    
-                    # Bound the prompt while still giving the model whole-dataset descriptive statistics.
-                    data_for_prompt = first_df.to_csv(index=False) if len(first_df) <= 200 else first_df.head(25).to_csv(index=False)
-                    summary_statistics = first_df.describe(include="all").fillna("").to_string()
-                    data_summary = {
-                        "columns": list(first_df.columns),
-                        "shape": first_df.shape,
-                        "sample_data": first_df.head(3).to_dict('records'),
-                        "data_types": first_df.dtypes.to_dict()
-                    }
                     
                     try:
                         client = get_openai_client()
@@ -459,22 +557,12 @@ Questions:
             # Default analysis for any data - JSON array format
             print("Performing default analysis - JSON array format")
             if dataframes:
-                first_df = pd.concat(list(dataframes.values()), ignore_index=True, sort=False) if len(dataframes) > 1 else list(dataframes.values())[0]
                 print(f"Default analysis on dataframe with columns: {list(first_df.columns)}")
-                
+
                 # Use LLM to analyze the question and provide exactly what's requested
                 try:
                     client = get_openai_client()
                     if client:
-                        # Bound the prompt while still giving the model whole-dataset descriptive statistics.
-                        data_for_prompt = first_df.to_csv(index=False) if len(first_df) <= 200 else first_df.head(25).to_csv(index=False)
-                        summary_statistics = first_df.describe(include="all").fillna("").to_string()
-                        data_summary = {
-                            "columns": list(first_df.columns),
-                            "shape": first_df.shape,
-                            "sample_data": first_df.head(3).to_dict('records'),
-                            "data_types": first_df.dtypes.to_dict()
-                        }
                         
                         prompt = f"""
 You are a data analyst. Given this dataset and question, provide EXACTLY what is requested - nothing more, nothing less.
@@ -550,7 +638,7 @@ Provide only the JSON array, no explanations.
                 
                 # Simple keyword-based analysis for common requests
                 if "how many" in question_lower or "count" in question_lower:
-                    return [first_df.shape[0]]
+                    return [data_summary["shape"][0]]
                 elif "most common" in question_lower or "mode" in question_lower:
                     for col in first_df.columns:
                         if first_df[col].dtype == 'object':
