@@ -374,8 +374,16 @@ class DataAnalyst:
                     
             except Exception as e:
                 print(f"Error processing {file_path}: {e}")
+                if (
+                    Path(file_path).suffix.lower() == ".csv"
+                    and Path(file_path).is_file()
+                    and Path(file_path).stat().st_size >= int(
+                        os.getenv("DUCKDB_CSV_THRESHOLD_BYTES", str(20 * 1024 * 1024))
+                    )
+                ):
+                    raise ValueError(f"Could not process large CSV '{Path(file_path).name}': {e}") from e
                 continue
-                
+
         return dataframes
     
     def create_visualization(self, data: pd.DataFrame, plot_type: str = "scatter") -> str:
