@@ -14,7 +14,7 @@ The application uses the OpenAI Python SDK as an OpenAI-compatible client, confi
 
 - CSV, Excel, JSON and Parquet data loading
 - ZIP and TAR.GZ archive extraction with path, link, entry-count and expansion-size checks
-- Pandas/NumPy data processing and DuckDB Parquet support
+- Pandas/NumPy data processing; large CSVs are scanned with memory-bounded DuckDB and summarized without loading the full file into Pandas
 - Matplotlib scatter plots with a regression line
 - FastAPI multipart endpoint at POST /api/
 - Configurable OpenRouter model and request timeout
@@ -112,14 +112,14 @@ The current web-table loader only accepts an explicit HTTPS Wikipedia page URL i
 
 - FastAPI + Uvicorn
 - Pandas, NumPy, DuckDB, PyArrow
-- Matplotlib, scikit-learn
+- Matplotlib, NumPy
 - Requests, BeautifulSoup4
 - OpenAI-compatible Python SDK pointed at OpenRouter
 - Pillow, aiofiles
 
 ## Validation notes
 
-The language model is given the complete uploaded data for compact files (up to 200 rows), and a bounded sample plus whole-dataset descriptive statistics for larger files. This limits prompt size, but it is not a substitute for a deterministic query engine for arbitrary filtering or analyses on very large datasets. Verify exact high-stakes numerical results against Python/SQL calculations.
+The language model receives complete rows for compact files (up to 200 rows), and a bounded sample plus whole-file descriptive statistics for larger files. Large CSV files are scanned with DuckDB using a fixed memory limit and disk-backed temporary work; only a small sample is retained in Pandas for prompt examples and charts. This limits memory use and prompt size, but arbitrary question-specific calculations should still be verified against deterministic SQL/Python results. Verify exact high-stakes numerical results against Python/SQL calculations.
 
 Run the automated checks with:
 
